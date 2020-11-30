@@ -667,8 +667,8 @@ module ScrollView = struct
 
     let compute ~inject ((cursor_on, children, input) : Input.t) (model : Model.t) =
       (* TODO: Calculate maximums based on children *)
-      let max_width = 1. in
-      let max_height = 1. in
+      let max_width = 100. in
+      let max_height = 100. in
       let handle_wheel (wheel_event : Node_events.Mouse_wheel.t) =
         let event =
           match wheel_event with
@@ -687,8 +687,12 @@ module ScrollView = struct
           | _ -> Event.no_op in
         Event.Many [ event ] in
 
-      (* NOTE: No idea about what transform like this will do yet, but putting here
-       * so that I look more in to it. *)
+      (* NOTE: No idea about what transform like this will do yet, but putting here so that I look
+         more in to it. Preliminary finding from adding a translate into the todo_list component
+         (based on # of todos), I might be able to get a janky version working with it. *)
+      (* NOTE: does the box have to be made able to capture events like the mouse wheel before
+         attributes like on_mouse_wheel will actually take effect?. Looks like yes. Adding mouse
+         wheel handling to the clickable_box component may be what I need. *)
       let attributes =
         Attr.on_mouse_wheel handle_wheel
         :: Attr.style
