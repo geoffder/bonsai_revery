@@ -603,3 +603,107 @@ module Text_input = struct
 
     ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component
 end
+
+module ScrollView = struct
+  type props =
+    { scroll_track_color : (Color.t[@sexp.opaque])
+    ; scroll_thumb_color : (Color.t[@sexp.opaque])
+    ; scroll_bar_thickness : int
+    ; attributes : Attr.t list
+    }
+  [@@deriving sexp_of]
+
+  let props
+      ?(scroll_track_color = Color.rgba 0.0 0.0 0.0 0.4)
+      ?(scroll_thumb_color = Color.rgba 0.5 0.5 0.5 0.4)
+      ?(scroll_bar_thickness = 10)
+      attributes
+    =
+    { scroll_track_color; scroll_thumb_color; scroll_bar_thickness; attributes }
+
+
+  let is_mac =
+    Revery.Environment.(
+      match os with
+      | Mac -> true
+      | _ -> false)
+
+
+  let horizonal_scroll_multiplier = if is_mac then -1. else 1.
+
+  module T = struct
+    module Input = struct
+      type t = bool * Element.t list * props
+    end
+
+    module Model = struct
+      type bouncing_state =
+        | Bouncing of int
+        | Idle
+      [@@deriving equal, sexp]
+
+      type t =
+        { x_pos : int
+        ; y_pos : int
+        ; x_bounce : bouncing_state
+        ; y_bounce : bouncing_state
+        }
+      [@@deriving equal, sexp]
+
+      let default = { x_pos = 0; y_pos = 0; x_bounce = Idle; y_bounce = Idle }
+    end
+
+    module Action = struct
+      type t =
+        | HorizontalScroll of int
+        | VerticalScroll of int
+      [@@deriving sexp_of]
+    end
+
+    module Result = Element
+
+    let name = "ScrollView"
+    let default_style = Attr.default_style
+
+    let compute ~inject ((cursor_on, children, input) : Input.t) (model : Model.t) =
+      (* TODO: Calculate maximums based on children *)
+      let max_width = 1. in
+      let max_height = 1. in
+      let handle_wheel (wheel_event : Node_events.Mouse_wheel.t) =
+        let event =
+          match wheel_event with
+          | { shiftKey = true; deltaX = delta; _ } when Float.(abs delta > 0.) ->
+            let x_pos =
+              Float.(of_int model.x_pos + (delta * horizonal_scroll_multiplier))
+              |> Float.clamp_exn ~min:0. ~max:max_width
+              |> Int.of_float in
+            inject (Action.HorizontalScroll x_pos)
+          | { shiftKey = false; deltaY = delta; _ } when Float.(abs delta > 0.) ->
+            let y_pos =
+              Float.(of_int model.y_pos + delta)
+              |> Float.clamp_exn ~min:0. ~max:max_height
+              |> Int.of_float in
+            inject (Action.VerticalScroll y_pos)
+          | _ -> Event.no_op in
+        Event.Many [ event ] in
+
+      (* NOTE: No idea about what transform like this will do yet, but putting here
+       * so that I look more in to it. *)
+      let attributes =
+        Attr.on_mouse_wheel handle_wheel
+        :: Attr.style
+             Style.
+               [ transform
+                   [ TranslateX (Float.of_int model.x_pos); TranslateY (Float.of_int model.y_pos) ]
+               ]
+        :: input.attributes in
+      box attributes children
+
+
+    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+      | Action.HorizontalScroll x_pos -> { model with x_pos }
+      | Action.VerticalScroll y_pos -> { model with y_pos }
+  end
+
+  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
+end
