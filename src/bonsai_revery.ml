@@ -103,6 +103,26 @@ module Components : sig
     val component : (props, string * (string -> Event.t) * Element.t) Bonsai.t
   end
 
+  module ScrollView : sig
+    type props =
+      { scroll_track_color : Bonsai_revery__.Color.t
+      ; scroll_thumb_color : Bonsai_revery__.Color.t
+      ; scroll_bar_thickness : int
+      ; speed : float
+      ; attributes : Attributes.t list
+      }
+
+    val props
+      :  ?scroll_track_color:Bonsai_revery__.Color.t
+      -> ?scroll_thumb_color:Bonsai_revery__.Color.t
+      -> ?scroll_bar_thickness:int
+      -> ?speed:float
+      -> Attributes.t list
+      -> props
+
+    val component : (Element.t list * props, Element.t) Bonsai.t
+  end
+
   module Expert : sig
     type 'a component =
       ?key:UI.React.Key.t

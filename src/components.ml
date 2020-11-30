@@ -609,6 +609,7 @@ module ScrollView = struct
     { scroll_track_color : (Color.t[@sexp.opaque])
     ; scroll_thumb_color : (Color.t[@sexp.opaque])
     ; scroll_bar_thickness : int
+    ; speed : float
     ; attributes : Attr.t list
     }
   [@@deriving sexp_of]
@@ -617,9 +618,10 @@ module ScrollView = struct
       ?(scroll_track_color = Color.rgba 0.0 0.0 0.0 0.4)
       ?(scroll_thumb_color = Color.rgba 0.5 0.5 0.5 0.4)
       ?(scroll_bar_thickness = 10)
+      ?(speed = 25.)
       attributes
     =
-    { scroll_track_color; scroll_thumb_color; scroll_bar_thickness; attributes }
+    { scroll_track_color; scroll_thumb_color; scroll_bar_thickness; speed; attributes }
 
 
   let is_mac =
@@ -633,7 +635,7 @@ module ScrollView = struct
 
   module T = struct
     module Input = struct
-      type t = bool * Element.t list * props
+      type t = Element.t list * props
     end
 
     module Model = struct
@@ -665,34 +667,29 @@ module ScrollView = struct
     let name = "ScrollView"
     let default_style = Attr.default_style
 
-    let compute ~inject ((cursor_on, children, input) : Input.t) (model : Model.t) =
+    let compute ~inject ((children, input) : Input.t) (model : Model.t) =
       (* TODO: Calculate maximums based on children *)
       let max_width = 100. in
       let max_height = 100. in
-      let handle_wheel (wheel_event : Node_events.Mouse_wheel.t) =
+      let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
+        let delta = deltaY *. input.speed in
         let event =
-          match wheel_event with
-          | { shiftKey = true; deltaX = delta; _ } when Float.(abs delta > 0.) ->
-            let x_pos =
-              Float.(of_int model.x_pos + (delta * horizonal_scroll_multiplier))
-              |> Float.clamp_exn ~min:0. ~max:max_width
-              |> Int.of_float in
-            inject (Action.HorizontalScroll x_pos)
-          | { shiftKey = false; deltaY = delta; _ } when Float.(abs delta > 0.) ->
+          match Float.(abs delta > 0.), shiftKey with
+          | true, false ->
             let y_pos =
               Float.(of_int model.y_pos + delta)
               |> Float.clamp_exn ~min:0. ~max:max_height
               |> Int.of_float in
             inject (Action.VerticalScroll y_pos)
-          | _ -> Event.no_op in
+          | true, true ->
+            let x_pos =
+              Float.(of_int model.x_pos + (delta * horizonal_scroll_multiplier))
+              |> Float.clamp_exn ~min:0. ~max:max_width
+              |> Int.of_float in
+            inject (Action.HorizontalScroll x_pos)
+          | false, _ -> Event.no_op in
         Event.Many [ event ] in
 
-      (* NOTE: No idea about what transform like this will do yet, but putting here so that I look
-         more in to it. Preliminary finding from adding a translate into the todo_list component
-         (based on # of todos), I might be able to get a janky version working with it. *)
-      (* NOTE: does the box have to be made able to capture events like the mouse wheel before
-         attributes like on_mouse_wheel will actually take effect?. Looks like yes. Adding mouse
-         wheel handling to the clickable_box component may be what I need. *)
       let attributes =
         Attr.on_mouse_wheel handle_wheel
         :: Attr.style
