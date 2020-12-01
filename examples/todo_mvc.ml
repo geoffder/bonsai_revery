@@ -95,7 +95,7 @@ module Styles = struct
       ; left 0
       ; right 0
       ; align_items `Stretch
-      ; justify_content `Center
+      ; justify_content `FlexStart
       ; flex_direction `Column
       ; background_color Theme.app_background
       ; padding_vertical 2
@@ -122,7 +122,6 @@ module Styles = struct
       ; align_self `Center
       ; margin_top (Theme.remi 2.)
       ; text_wrap NoWrap
-      ; flex_grow 1
       ]
 
 
@@ -311,7 +310,7 @@ module Components = struct
     module Styles = struct
       let container =
         let open Style in
-        [ flex_direction `Row; justify_content `SpaceBetween ]
+        [ flex_grow 1; flex_direction `Row; justify_content `SpaceBetween ]
 
 
       let filterButtonsContainer =
@@ -392,7 +391,14 @@ let todo_list =
     Tuple2.map_fst ~f:(fun model ->
         Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
     @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component in
-  Attr.[ style Style.[ flex_grow 1; overflow `Hidden; max_height 600 ] ], Map.data todos
+  Map.data todos
+
+
+let scroll_view_list =
+  Bonsai.map todo_list ~f:(fun eles ->
+      let children inj = List.map ~f:(fun e -> e inj) eles in
+      children, ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ])
+  >>> ScrollView.component
 
 
 let text_input =
@@ -456,13 +462,6 @@ let state_component =
         { model with todos })
 
 
-let scroll_view_list =
-  Bonsai.map todo_list ~f:(fun (attrs, eles) ->
-      let children inj = List.map ~f:(fun e -> e inj) eles in
-      children, ScrollView.props Style.[ flex_grow 100; overflow `Hidden; max_height 550 ])
-  >>> ScrollView.component
-
-
 let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
@@ -477,7 +476,7 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
             ] in
       let header =
         box
-          Attr.[ style Style.[ justify_content `FlexStart; flex_direction `Row ] ]
+          Attr.[ style Style.[ flex_grow 0; justify_content `FlexStart; flex_direction `Row ] ]
           [ bonsai; title ] in
 
       box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]

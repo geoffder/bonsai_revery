@@ -703,14 +703,6 @@ module ScrollView = struct
       let diff_height =
         Float.(total_height - of_int model.y_max |> clamp_exn ~min:0. ~max:Float.max_value) in
 
-      Timber.Log.perf
-        (sprintf "mw %i   mh %i" (Int.of_float total_width) (Int.of_float total_height))
-        (fun () -> ());
-      Timber.Log.perf (sprintf "x %i   y %i" model.x_max model.y_max) (fun () -> ());
-      Timber.Log.perf
-        (sprintf "w %i   h %i" (Int.of_float diff_width) (Int.of_float diff_height))
-        (fun () -> ());
-
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let delta = deltaY *. input.speed in
         let event =
@@ -718,13 +710,13 @@ module ScrollView = struct
           | true, false ->
             let y_pos =
               Float.(of_int model.y_pos + delta)
-              |> Float.clamp_exn ~min:0. ~max:diff_height
+              |> Float.clamp_exn ~min:0. ~max:(diff_height *. 1.5)
               |> Int.of_float in
             inject (VerticalScroll y_pos)
           | true, true ->
             let x_pos =
               Float.(of_int model.x_pos + (delta * horizonal_scroll_multiplier))
-              |> Float.clamp_exn ~min:0. ~max:diff_width
+              |> Float.clamp_exn ~min:0. ~max:(diff_width *. 1.5)
               |> Int.of_float in
             inject (HorizontalScroll x_pos)
           | false, _ -> Event.no_op in
@@ -735,16 +727,24 @@ module ScrollView = struct
       let attributes =
         [ Attr.on_mouse_wheel handle_wheel
         ; Attr.on_dimensions_changed handle_dimension_change
-        ; Attr.style
-            ( Style.transform
-                [ TranslateX (-1. *. Float.of_int model.x_pos)
-                ; TranslateY (-1. *. Float.of_int model.y_pos)
-                ]
-            :: input.style )
+        ; Attr.style input.style
         ] in
-      box attributes children
+      let trans =
+        Attr.
+          [ style
+              Style.
+                [ transform
+                    [ TranslateX (-1. *. Float.of_int model.x_pos)
+                    ; TranslateY (-1. *. Float.of_int model.y_pos)
+                    ]
+                ]
+          ] in
+      box attributes (List.map ~f:(fun c -> box trans [ c ]) children)
 
 
+    (* NOTE: Since there is no action to do clear them out, this currently does not deal with
+       removal of children. If the keys are not written over, (not reused by the function generating
+       them) then the total height and width calculated from the child_dims map will not decrease. *)
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
       | HorizontalScroll x_pos -> { model with x_pos }
       | VerticalScroll y_pos -> { model with y_pos }
