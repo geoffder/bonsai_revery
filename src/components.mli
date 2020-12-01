@@ -42,10 +42,11 @@ module ScrollView : sig
 
   type props =
     { speed : float
-    ; style : Style.t list
+    ; styles : Style.t list
+    ; attributes : Attributes.t list
     }
 
-  val props : ?speed:float -> Style.t list -> props
+  val props : ?speed:float -> ?attributes:Attributes.t list -> Style.t list -> props
   val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
 end
 

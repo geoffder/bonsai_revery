@@ -614,11 +614,12 @@ end
 module ScrollView = struct
   type props =
     { speed : float
-    ; style : (Style.t[@sexp.opaque]) list
+    ; styles : (Style.t[@sexp.opaque]) list
+    ; attributes : Attr.t list
     }
   [@@deriving sexp_of]
 
-  let props ?(speed = 25.) style = { speed; style }
+  let props ?(speed = 25.) ?(attributes = []) styles = { speed; styles; attributes }
 
   let is_mac =
     Revery.Environment.(
@@ -673,6 +674,7 @@ module ScrollView = struct
 
     let name = "ScrollView"
 
+    (* Sum over the major dimension, max over the minor dimension. *)
     let calculate_totals columnar dims =
       let w_fun, h_fun = if columnar then Int.max, ( + ) else ( + ), Int.max in
       let f ~key:_ ~data:(w, h) (w_acc, h_acc) = w_fun w_acc w, h_fun h_acc h in
@@ -680,7 +682,7 @@ module ScrollView = struct
 
 
     let compute ~inject ((children, input) : Input.t) (model : Model.t) =
-      let total_width, total_height = calculate_totals (is_columnar input.style) model.child_dims in
+      let total_width, total_height = calculate_totals (is_columnar input.styles) model.child_dims in
       let diff_width =
         Float.(of_int Int.(total_width - model.width) |> clamp_exn ~min:0. ~max:max_value) in
       let diff_height =
@@ -704,7 +706,6 @@ module ScrollView = struct
             inject (HorizontalScroll x_pos)
           | false, _ -> Event.no_op in
         Event.Many [ event ] in
-
       let handle_dimension_change ({ width; height } : Node_events.Dimensions_changed.t) =
         Event.Many
           [ inject (Dimensions (width, height)); inject (TrimChildren (Map.key_set children)) ]
@@ -717,11 +718,13 @@ module ScrollView = struct
           ; on_dimensions_changed (fun { width; height } ->
                 Event.Many [ inject (ChildDimensions (key, width, height)) ])
           ] in
+
       box
-        [ Attr.on_mouse_wheel handle_wheel
-        ; Attr.on_dimensions_changed handle_dimension_change
-        ; Attr.style input.style
-        ]
+        Attr.(
+          on_mouse_wheel handle_wheel
+          :: on_dimensions_changed handle_dimension_change
+          :: style input.styles
+          :: input.attributes)
         (Map.mapi ~f:(fun ~key ~data -> box (translation key) [ data ]) children |> Map.data)
 
 

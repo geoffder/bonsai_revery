@@ -106,10 +106,11 @@ module Components : sig
   module ScrollView : sig
     type props =
       { speed : float
-      ; style : Style.t list
+      ; styles : Style.t list
+      ; attributes : Attr.t list
       }
 
-    val props : ?speed:float -> Style.t list -> props
+    val props : ?speed:float -> ?attributes:Attr.t list -> Style.t list -> props
 
     open Core_kernel
 
