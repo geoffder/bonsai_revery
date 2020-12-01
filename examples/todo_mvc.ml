@@ -387,16 +387,14 @@ end
 
 (* The data of todos are closures that take inject from ScrollView. (applied in scroll_view_list) *)
 let todo_list =
-  let%map.Bonsai todos =
-    Tuple2.map_fst ~f:(fun model ->
-        Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
-    @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component in
-  Map.data todos
+  Tuple2.map_fst ~f:(fun model ->
+      Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
+  @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component
 
 
 let scroll_view_list =
   Bonsai.map todo_list ~f:(fun eles ->
-      let children inj = List.map ~f:(fun e -> e inj) eles in
+      let children inj = Map.map ~f:(fun e -> e inj) eles in
       children, ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ])
   >>> ScrollView.component
 

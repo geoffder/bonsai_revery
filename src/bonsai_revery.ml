@@ -105,10 +105,7 @@ module Components : sig
 
   module ScrollView : sig
     type props =
-      { scroll_track_color : Bonsai_revery__.Color.t
-      ; scroll_thumb_color : Bonsai_revery__.Color.t
-      ; scroll_bar_thickness : int
-      ; speed : float
+      { speed : float
       ; style : Style.t list
       }
 
@@ -124,16 +121,12 @@ module Components : sig
       -> Revery_UI__NodeEvents.DimensionsChangedEventParams.t
       -> Bonsai_revery__Import.Event.t
 
-    val props
-      :  ?scroll_track_color:Bonsai_revery__.Color.t
-      -> ?scroll_thumb_color:Bonsai_revery__.Color.t
-      -> ?scroll_bar_thickness:int
-      -> ?speed:float
-      -> Style.t list
-      -> props
+    val props : ?speed:float -> Style.t list -> props
+
+    open Core_kernel
 
     val component
-      : ( ((T.Action.t -> Bonsai_revery__Import.Event.t) -> Element.t list) * props
+      : ( ((T.Action.t -> Bonsai_revery__Import.Event.t) -> Element.t Map.M(Int).t) * props
         , Element.t )
         Bonsai.t
   end

@@ -613,23 +613,12 @@ end
 
 module ScrollView = struct
   type props =
-    { scroll_track_color : (Color.t[@sexp.opaque])
-    ; scroll_thumb_color : (Color.t[@sexp.opaque])
-    ; scroll_bar_thickness : int
-    ; speed : float
+    { speed : float
     ; style : (Style.t[@sexp.opaque]) list
     }
   [@@deriving sexp_of]
 
-  let props
-      ?(scroll_track_color = Color.rgba 0.0 0.0 0.0 0.4)
-      ?(scroll_thumb_color = Color.rgba 0.5 0.5 0.5 0.4)
-      ?(scroll_bar_thickness = 10)
-      ?(speed = 25.)
-      style
-    =
-    { scroll_track_color; scroll_thumb_color; scroll_bar_thickness; speed; style }
-
+  let props ?(speed = 25.) style = { speed; style }
 
   let is_mac =
     Revery.Environment.(
@@ -642,44 +631,31 @@ module ScrollView = struct
 
   module T = struct
     module Model = struct
-      type bouncing_state =
-        | Bouncing of int
-        | Idle
-      [@@deriving equal, sexp]
-
       type t =
-        { x_pos : int
-        ; y_pos : int
+        { x_pos : float
+        ; y_pos : float
         ; x_max : int
         ; y_max : int
         ; child_dims : (int * int) Map.M(Int).t
-        ; x_bounce : bouncing_state
-        ; y_bounce : bouncing_state
         }
       [@@deriving equal, sexp]
 
       let default =
-        { x_pos = 0
-        ; y_pos = 0
-        ; x_max = 0
-        ; y_max = 0
-        ; child_dims = Map.empty (module Int)
-        ; x_bounce = Idle
-        ; y_bounce = Idle
-        }
+        { x_pos = 0.; y_pos = 0.; x_max = 0; y_max = 0; child_dims = Map.empty (module Int) }
     end
 
     module Action = struct
       type t =
-        | HorizontalScroll of int
-        | VerticalScroll of int
+        | HorizontalScroll of float
+        | VerticalScroll of float
         | Dimensions of int * int
         | ChildDimensions of int * int * int
+        | TrimChildren of Set.M(Int).t
       [@@deriving sexp_of]
     end
 
     module Input = struct
-      type t = ((Action.t -> Bonsai_revery__Import.Event.t) -> Element.t list) * props
+      type t = ((Action.t -> Bonsai_revery__Import.Event.t) -> Element.t Map.M(Int).t) * props
     end
 
     open Action
@@ -699,31 +675,29 @@ module ScrollView = struct
         model.child_dims |> Map.fold ~init:0 ~f:(fun ~key:_ ~data:(_, h) m -> m + h) |> Float.of_int
       in
       let diff_width =
-        Float.(total_width - of_int model.x_max |> clamp_exn ~min:0. ~max:Float.max_value) in
+        Float.(total_width - of_int model.x_max |> clamp_exn ~min:0. ~max:max_value) in
       let diff_height =
-        Float.(total_height - of_int model.y_max |> clamp_exn ~min:0. ~max:Float.max_value) in
+        Float.(total_height - of_int model.y_max |> clamp_exn ~min:0. ~max:max_value) in
 
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let delta = deltaY *. input.speed in
         let event =
           match Float.(abs delta > 0.), shiftKey with
           | true, false ->
-            let y_pos =
-              Float.(of_int model.y_pos + delta)
-              |> Float.clamp_exn ~min:0. ~max:(diff_height *. 1.5)
-              |> Int.of_float in
+            let y_pos = model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:(diff_height *. 1.6) in
             inject (VerticalScroll y_pos)
           | true, true ->
             let x_pos =
-              Float.(of_int model.x_pos + (delta * horizonal_scroll_multiplier))
-              |> Float.clamp_exn ~min:0. ~max:(diff_width *. 1.5)
-              |> Int.of_float in
+              model.x_pos +. (delta *. horizonal_scroll_multiplier)
+              |> Float.clamp_exn ~min:0. ~max:(diff_width *. 1.6) in
             inject (HorizontalScroll x_pos)
           | false, _ -> Event.no_op in
         Event.Many [ event ] in
 
       let handle_dimension_change ({ width; height } : Node_events.Dimensions_changed.t) =
-        Event.Many [ inject (Dimensions (width, height)) ] in
+        Event.Many
+          [ inject (Dimensions (width, height)); inject (TrimChildren (Map.key_set children)) ]
+      in
       let attributes =
         [ Attr.on_mouse_wheel handle_wheel
         ; Attr.on_dimensions_changed handle_dimension_change
@@ -733,25 +707,19 @@ module ScrollView = struct
         Attr.
           [ style
               Style.
-                [ transform
-                    [ TranslateX (-1. *. Float.of_int model.x_pos)
-                    ; TranslateY (-1. *. Float.of_int model.y_pos)
-                    ]
-                ]
+                [ transform [ TranslateX (-1. *. model.x_pos); TranslateY (-1. *. model.y_pos) ] ]
           ] in
-      box attributes (List.map ~f:(fun c -> box trans [ c ]) children)
+      box attributes (List.map ~f:(fun c -> box trans [ c ]) (Map.data children))
 
 
-    (* NOTE: Since there is no action to do clear them out, this currently does not deal with
-       removal of children. If the keys are not written over, (not reused by the function generating
-       them) then the total height and width calculated from the child_dims map will not decrease. *)
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
       | HorizontalScroll x_pos -> { model with x_pos }
       | VerticalScroll y_pos -> { model with y_pos }
       | Dimensions (x_max, y_max) -> { model with x_max; y_max }
       | ChildDimensions (key, w, h) ->
-        let child_dims = Map.set model.child_dims ~key ~data:(w, h) in
-        { model with child_dims }
+        { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
+      | TrimChildren keys ->
+        { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
   end
 
   let child_dim_injection inject key ({ width; height } : Node_events.Dimensions_changed.t) =
