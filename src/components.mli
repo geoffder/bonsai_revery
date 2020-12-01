@@ -45,24 +45,8 @@ module ScrollView : sig
     ; style : Style.t list
     }
 
-  module T : sig
-    module Action : sig
-      type t
-    end
-  end
-
-  val inject_child_dims
-    :  (T.Action.t -> Bonsai_revery__Import.Event.t)
-    -> int
-    -> Revery_UI__NodeEvents.DimensionsChangedEventParams.t
-    -> Bonsai_revery__Import.Event.t
-
   val props : ?speed:float -> Style.t list -> props
-
-  val component
-    : ( ((T.Action.t -> Bonsai_revery__Import.Event.t) -> Element.t Map.M(Int).t) * props
-      , Element.t )
-      Bonsai.t
+  val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
 end
 
 module Expert : sig

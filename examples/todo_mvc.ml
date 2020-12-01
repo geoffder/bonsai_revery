@@ -246,11 +246,10 @@ module Components = struct
 
     let view ~task:_ = box Attr.[ style Styles.box ] []
 
-    (* NOTE: additional inj parameter. Returns a closure that will take the inject from ScrollView. *)
     let component =
-      Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) inj ->
+      Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) ->
           box
-            Attr.[ on_dimensions_changed (ScrollView.inject_child_dims inj key); style Styles.box ]
+            Attr.[ style Styles.box ]
             [ Checkbox.view ~checked:todo.completed ~on_toggle:(inject (Action.Toggle key))
             ; text Attr.[ style (Styles.text todo.completed); kind Theme.font_info ] todo.title
             ; box
@@ -384,7 +383,6 @@ module Components = struct
   end
 end
 
-(* The data of todos are closures that take inject from ScrollView. (applied in scroll_view_list) *)
 let todo_list =
   Tuple2.map_fst ~f:(fun model ->
       Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
@@ -392,8 +390,7 @@ let todo_list =
 
 
 let scroll_view_list =
-  Bonsai.map todo_list ~f:(fun eles ->
-      let children inj = Map.map ~f:(fun e -> e inj) eles in
+  Bonsai.map todo_list ~f:(fun children ->
       children, ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ])
   >>> ScrollView.component
 

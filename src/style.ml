@@ -23,6 +23,9 @@ type text_wrap_type = Revery.TextWrapping.wrapType =
   | WrapIgnoreWhitespace
   | WrapHyphenate
 
+type flex_direction =
+  Flex__LayoutTypes.Create(Revery_UI__Layout.Node)(Flex__FixedEncoding).flexDirection
+
 let align_items : _ -> t = UI.Style.alignItems
 let align_self : _ -> t = UI.Style.alignSelf
 let background_color : Color.t -> t = UI.Style.backgroundColor

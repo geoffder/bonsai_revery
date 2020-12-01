@@ -629,6 +629,16 @@ module ScrollView = struct
 
   let horizonal_scroll_multiplier = if is_mac then -1. else 1.
 
+  (* Default is column flex. *)
+  let is_columnar : Style.t list -> bool =
+    List.for_all ~f:(function
+      | `FlexDirection (d : Style.flex_direction) ->
+        ( match d with
+        | Column | ColumnReverse -> true
+        | _ -> false )
+      | _ -> true)
+
+
   module T = struct
     module Model = struct
       type t =
@@ -655,41 +665,42 @@ module ScrollView = struct
     end
 
     module Input = struct
-      type t = ((Action.t -> Bonsai_revery__Import.Event.t) -> Element.t Map.M(Int).t) * props
+      type t = Element.t Map.M(Int).t * props
     end
 
     open Action
     module Result = Element
 
     let name = "ScrollView"
-    let default_style = Attr.default_style
+
+    let calculate_totals columnar dims =
+      let w_fun, h_fun = if columnar then Int.max, ( + ) else ( + ), Int.max in
+      let f ~key:_ ~data:(w, h) (w_acc, h_acc) = w_fun w_acc w, h_fun h_acc h in
+      dims |> Map.fold ~init:(0, 0) ~f
+
 
     let compute ~inject ((children, input) : Input.t) (model : Model.t) =
-      (* TODO: Check which way this element is flexing (determines how max h and w are caculcated. ) *)
-      let children = children inject in
-      let total_width =
-        model.child_dims
-        |> Map.fold ~init:0 ~f:(fun ~key:_ ~data:(w, _) m -> Int.max m w)
-        |> Float.of_int in
-      let total_height =
-        model.child_dims |> Map.fold ~init:0 ~f:(fun ~key:_ ~data:(_, h) m -> m + h) |> Float.of_int
-      in
+      let total_width, total_height = calculate_totals (is_columnar input.style) model.child_dims in
       let diff_width =
-        Float.(total_width - of_int model.width |> clamp_exn ~min:0. ~max:max_value) in
+        Float.(of_int Int.(total_width - model.width) |> clamp_exn ~min:0. ~max:max_value) in
       let diff_height =
-        Float.(total_height - of_int model.height |> clamp_exn ~min:0. ~max:max_value) in
+        Float.(of_int Int.(total_height - model.height) |> clamp_exn ~min:0. ~max:max_value) in
+      let fudge_height = Float.(if diff_height > 0. then of_int model.height * 0.05 else 0.) in
+      let fudge_width = Float.(if diff_width > 0. then of_int model.width * 0.05 else 0.) in
 
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let delta = deltaY *. input.speed in
         let event =
           match Float.(abs delta > 0.), shiftKey with
           | true, false ->
-            let y_pos = model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:(diff_height *. 1.6) in
+            let y_pos =
+              model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:(diff_height +. fudge_height)
+            in
             inject (VerticalScroll y_pos)
           | true, true ->
             let x_pos =
               model.x_pos +. (delta *. horizonal_scroll_multiplier)
-              |> Float.clamp_exn ~min:0. ~max:(diff_width *. 1.6) in
+              |> Float.clamp_exn ~min:0. ~max:(diff_width +. fudge_width) in
             inject (HorizontalScroll x_pos)
           | false, _ -> Event.no_op in
         Event.Many [ event ] in
@@ -698,18 +709,20 @@ module ScrollView = struct
         Event.Many
           [ inject (Dimensions (width, height)); inject (TrimChildren (Map.key_set children)) ]
       in
-      let attributes =
-        [ Attr.on_mouse_wheel handle_wheel
-        ; Attr.on_dimensions_changed handle_dimension_change
-        ; Attr.style input.style
-        ] in
-      let trans =
+      let translation key =
         Attr.
           [ style
               Style.
                 [ transform [ TranslateX (-1. *. model.x_pos); TranslateY (-1. *. model.y_pos) ] ]
+          ; on_dimensions_changed (fun { width; height } ->
+                Event.Many [ inject (ChildDimensions (key, width, height)) ])
           ] in
-      box attributes (List.map ~f:(fun c -> box trans [ c ]) (Map.data children))
+      box
+        [ Attr.on_mouse_wheel handle_wheel
+        ; Attr.on_dimensions_changed handle_dimension_change
+        ; Attr.style input.style
+        ]
+        (Map.mapi ~f:(fun ~key ~data -> box (translation key) [ data ]) children |> Map.data)
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
@@ -721,10 +734,6 @@ module ScrollView = struct
       | TrimChildren keys ->
         { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
   end
-
-  let inject_child_dims inject key ({ width; height } : Node_events.Dimensions_changed.t) =
-    Event.Many [ inject (T.Action.ChildDimensions (key, width, height)) ]
-
 
   let component = Bonsai.of_module (module T) ~default_model:T.Model.default
 end
