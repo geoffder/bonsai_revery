@@ -250,8 +250,7 @@ module Components = struct
     let component =
       Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) inj ->
           box
-            Attr.
-              [ on_dimensions_changed (ScrollView.child_dim_injection inj key); style Styles.box ]
+            Attr.[ on_dimensions_changed (ScrollView.inject_child_dims inj key); style Styles.box ]
             [ Checkbox.view ~checked:todo.completed ~on_toggle:(inject (Action.Toggle key))
             ; text Attr.[ style (Styles.text todo.completed); kind Theme.font_info ] todo.title
             ; box

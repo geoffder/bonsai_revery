@@ -51,7 +51,7 @@ module ScrollView : sig
     end
   end
 
-  val child_dim_injection
+  val inject_child_dims
     :  (T.Action.t -> Bonsai_revery__Import.Event.t)
     -> int
     -> Revery_UI__NodeEvents.DimensionsChangedEventParams.t

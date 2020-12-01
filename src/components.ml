@@ -634,14 +634,14 @@ module ScrollView = struct
       type t =
         { x_pos : float
         ; y_pos : float
-        ; x_max : int
-        ; y_max : int
+        ; width : int
+        ; height : int
         ; child_dims : (int * int) Map.M(Int).t
         }
       [@@deriving equal, sexp]
 
       let default =
-        { x_pos = 0.; y_pos = 0.; x_max = 0; y_max = 0; child_dims = Map.empty (module Int) }
+        { x_pos = 0.; y_pos = 0.; width = 0; height = 0; child_dims = Map.empty (module Int) }
     end
 
     module Action = struct
@@ -675,9 +675,9 @@ module ScrollView = struct
         model.child_dims |> Map.fold ~init:0 ~f:(fun ~key:_ ~data:(_, h) m -> m + h) |> Float.of_int
       in
       let diff_width =
-        Float.(total_width - of_int model.x_max |> clamp_exn ~min:0. ~max:max_value) in
+        Float.(total_width - of_int model.width |> clamp_exn ~min:0. ~max:max_value) in
       let diff_height =
-        Float.(total_height - of_int model.y_max |> clamp_exn ~min:0. ~max:max_value) in
+        Float.(total_height - of_int model.height |> clamp_exn ~min:0. ~max:max_value) in
 
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let delta = deltaY *. input.speed in
@@ -715,14 +715,14 @@ module ScrollView = struct
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
       | HorizontalScroll x_pos -> { model with x_pos }
       | VerticalScroll y_pos -> { model with y_pos }
-      | Dimensions (x_max, y_max) -> { model with x_max; y_max }
+      | Dimensions (width, height) -> { model with width; height }
       | ChildDimensions (key, w, h) ->
         { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
       | TrimChildren keys ->
         { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
   end
 
-  let child_dim_injection inject key ({ width; height } : Node_events.Dimensions_changed.t) =
+  let inject_child_dims inject key ({ width; height } : Node_events.Dimensions_changed.t) =
     Event.Many [ inject (T.Action.ChildDimensions (key, width, height)) ]
 
 
