@@ -109,18 +109,33 @@ module Components : sig
       ; scroll_thumb_color : Bonsai_revery__.Color.t
       ; scroll_bar_thickness : int
       ; speed : float
-      ; attributes : Attributes.t list
+      ; style : Style.t list
       }
+
+    module T : sig
+      module Action : sig
+        type t
+      end
+    end
+
+    val child_dim_injection
+      :  (T.Action.t -> Bonsai_revery__Import.Event.t)
+      -> int
+      -> Revery_UI__NodeEvents.DimensionsChangedEventParams.t
+      -> Bonsai_revery__Import.Event.t
 
     val props
       :  ?scroll_track_color:Bonsai_revery__.Color.t
       -> ?scroll_thumb_color:Bonsai_revery__.Color.t
       -> ?scroll_bar_thickness:int
       -> ?speed:float
-      -> Attributes.t list
+      -> Style.t list
       -> props
 
-    val component : (Element.t list * props, Element.t) Bonsai.t
+    val component
+      : ( ((T.Action.t -> Bonsai_revery__Import.Event.t) -> Element.t list) * props
+        , Element.t )
+        Bonsai.t
   end
 
   module Expert : sig

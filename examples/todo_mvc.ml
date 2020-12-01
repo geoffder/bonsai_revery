@@ -122,6 +122,7 @@ module Styles = struct
       ; align_self `Center
       ; margin_top (Theme.remi 2.)
       ; text_wrap NoWrap
+      ; flex_grow 1
       ]
 
 
@@ -246,10 +247,12 @@ module Components = struct
 
     let view ~task:_ = box Attr.[ style Styles.box ] []
 
+    (* NOTE: additional inj parameter. Returns a closure that will take the inject from ScrollView. *)
     let component =
-      Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) ->
+      Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) inj ->
           box
-            Attr.[ style Styles.box ]
+            Attr.
+              [ on_dimensions_changed (ScrollView.child_dim_injection inj key); style Styles.box ]
             [ Checkbox.view ~checked:todo.completed ~on_toggle:(inject (Action.Toggle key))
             ; text Attr.[ style (Styles.text todo.completed); kind Theme.font_info ] todo.title
             ; box
@@ -271,6 +274,7 @@ module Components = struct
           ; margin 2
           ; align_items `Center
           ; overflow `Hidden
+          ; flex_grow 1
           ]
 
 
@@ -382,12 +386,13 @@ module Components = struct
   end
 end
 
+(* The data of todos are closures that take inject from ScrollView. (applied in scroll_view_list) *)
 let todo_list =
   let%map.Bonsai todos =
     Tuple2.map_fst ~f:(fun model ->
         Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
     @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component in
-  box Attr.[ style Style.[ flex_grow 1 ] ] (Map.data todos)
+  Attr.[ style Style.[ flex_grow 1; overflow `Hidden; max_height 600 ] ], Map.data todos
 
 
 let text_input =
@@ -451,9 +456,16 @@ let state_component =
         { model with todos })
 
 
+let scroll_view_list =
+  Bonsai.map todo_list ~f:(fun (attrs, eles) ->
+      let children inj = List.map ~f:(fun e -> e inj) eles in
+      children, ScrollView.props Style.[ flex_grow 100; overflow `Hidden; max_height 550 ])
+  >>> ScrollView.component
+
+
 let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
-  >>> let%map.Bonsai todo_list = todo_list
+  >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
       and footer = footer in
       let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
@@ -468,4 +480,4 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
           Attr.[ style Style.[ justify_content `FlexStart; flex_direction `Row ] ]
           [ bonsai; title ] in
 
-      box Attr.[ style Styles.app_container ] [ header; add_todo; todo_list; footer ]
+      box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]
