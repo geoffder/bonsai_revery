@@ -72,5 +72,8 @@ end
 module BoundingBox2d = struct
   include Revery_Math.BoundingBox2d
 
+  let get_bounds = getBounds
+  let is_point_inside = isPointInside
+  let to_string = toString
   let equal = equals
 end

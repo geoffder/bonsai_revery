@@ -50,15 +50,13 @@ module BoundingBox2d : sig
   type t = Revery_Math.BoundingBox2d.t
 
   val create : float -> float -> float -> float -> t
-  val getBounds : t -> float * float * float * float
+  val get_bounds : t -> float * float * float * float
   val intersects : t -> t -> bool
   val intersect : t -> t -> t
-  val isPointInside : x:float -> y:float -> t -> bool
+  val is_point_inside : x:float -> y:float -> t -> bool
   val transform : t -> Skia.Matrix.t -> t
-  val toString : t -> string
+  val to_string : t -> string
+  val equal : t -> t -> bool
 
   module Mutable = Revery_Math.BoundingBox2d.Mutable
-
-  val equals : t -> t -> bool
-  val equal : t -> t -> bool
 end
