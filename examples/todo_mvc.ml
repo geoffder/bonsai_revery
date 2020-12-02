@@ -104,15 +104,17 @@ module Styles = struct
       ]
 
 
-  let bonsai =
+  let bonsai = Style.[ align_self `FlexStart; width 150; height 150; margin_bottom 10 ]
+
+  let bonsai_box =
     Style.
-      [ align_self `FlexStart
+      [ align_items `Center
+      ; justify_content `FlexStart
+      ; flex_grow 0
       ; margin_top (Theme.remi 2.)
       ; margin_bottom (Theme.remi 2.)
       ; margin_left 50
       ; margin_right 100
-      ; width 150
-      ; height 150
       ]
 
 
@@ -395,6 +397,22 @@ let scroll_view_list =
   >>> ScrollView.component
 
 
+let drag_bonsai =
+  let img =
+    box
+      Attr.[ style Styles.bonsai_box ]
+      [ image
+          Attr.
+            [ style Styles.bonsai
+            ; kind KindSpec.(ImageNode (Image.make ~source:(Image.File Theme.bonsai_path) ()))
+            ]
+      ; text
+          Attr.[ style Style.[ color Theme.title_text_color ]; kind Theme.font_info ]
+          "( drag me! )"
+      ] in
+  Bonsai.pure ~f:(fun (_model, inject) -> img, Draggable.props []) >>> Draggable.component
+
+
 let text_input =
   Bonsai.pure ~f:(fun (_model, inject) ->
       Text_input.props
@@ -460,14 +478,9 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
+      and bonsai = drag_bonsai
       and footer = footer in
       let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
-      let bonsai =
-        image
-          Attr.
-            [ style Styles.bonsai
-            ; kind KindSpec.(ImageNode (Image.make ~source:(Image.File Theme.bonsai_path) ()))
-            ] in
       let header =
         box
           Attr.[ style Style.[ flex_grow 0; justify_content `FlexStart; flex_direction `Row ] ]
