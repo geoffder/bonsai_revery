@@ -745,9 +745,13 @@ module Draggable = struct
   type props =
     { styles : Style.t list
     ; attributes : Attr.t list
+    ; snap_back : bool
+    ; on_drop : (BoundingBox2d.t -> Event.t) option
     }
 
-  let props ?(attributes = []) styles = { styles; attributes }
+  let props ?(attributes = []) ?(snap_back = false) ?on_drop styles =
+    { styles; attributes; snap_back; on_drop }
+
 
   module T = struct
     module Model = struct
@@ -755,10 +759,11 @@ module Draggable = struct
         { start : (float * float) option
         ; x_trans : float
         ; y_trans : float
+        ; bounding_box : (BoundingBox2d.t option[@sexp.opaque])
         }
       [@@deriving equal, sexp]
 
-      let default = { start = None; x_trans = 0.; y_trans = 0. }
+      let default = { start = None; x_trans = 0.; y_trans = 0.; bounding_box = None }
     end
 
     module Action = struct
@@ -767,6 +772,7 @@ module Draggable = struct
         | Drop
         | Drag of float * float
         | Reset
+        | SetBoundingBox of (BoundingBox2d.t[@sexp.opaque])
       [@@deriving sexp_of]
     end
 
@@ -788,13 +794,17 @@ module Draggable = struct
           ] in
       let handle_mouse_up ({ button; _ } : Node_events.Mouse_button.t) =
         Event.Many
-          [ ( match button with
-            | BUTTON_LEFT -> inject Drop
-            | BUTTON_RIGHT -> inject Reset
-            | _ -> Event.no_op )
-          ] in
+          ( match button with
+          | BUTTON_LEFT ->
+            let events = inject Drop :: (if input.snap_back then [ inject Reset ] else []) in
+            ( match input.on_drop, model.bounding_box with
+            | Some cb, Some bb -> cb bb :: events
+            | _ -> events )
+          | BUTTON_RIGHT -> [ inject Reset ]
+          | _ -> [ Event.no_op ] ) in
       let handle_mouse_move ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t) =
         Event.Many [ inject (Drag (mouseX, mouseY)) ] in
+      let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb) ] in
       let translation = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
 
       box
@@ -802,6 +812,7 @@ module Draggable = struct
           on_mouse_down handle_mouse_down
           :: on_mouse_up handle_mouse_up
           :: on_mouse_move handle_mouse_move
+          :: on_bounding_box_changed handle_bounding_box_change
           :: style (translation :: input.styles)
           :: input.attributes)
         [ child ]
@@ -815,6 +826,7 @@ module Draggable = struct
         | Some (x0, y0) -> { model with x_trans = x1 -. x0; y_trans = y1 -. y0 }
         | None -> model )
       | Reset -> { model with x_trans = 0.; y_trans = 0. }
+      | SetBoundingBox bb -> { model with bounding_box = Some bb }
   end
 
   let component = Bonsai.of_module (module T) ~default_model:T.Model.default

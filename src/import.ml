@@ -68,3 +68,9 @@ end
 module Element = struct
   type t = Revery_UI.element
 end
+
+module BoundingBox2d = struct
+  include Revery_Math.BoundingBox2d
+
+  let equal = equals
+end

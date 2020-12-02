@@ -54,9 +54,17 @@ module Draggable : sig
   type props =
     { styles : Style.t list
     ; attributes : Attributes.t list
+    ; snap_back : bool
+    ; on_drop : (BoundingBox2d.t -> Event.t) option
     }
 
-  val props : ?attributes:Attributes.t list -> Style.t list -> props
+  val props
+    :  ?attributes:Attributes.t list
+    -> ?snap_back:bool
+    -> ?on_drop:(BoundingBox2d.t -> Event.t)
+    -> Style.t list
+    -> props
+
   val component : (Element.t * props, Element.t) Bonsai.t
 end
 

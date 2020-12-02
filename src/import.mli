@@ -45,3 +45,20 @@ module Bonsai : Bonsai.S with module Incr = Incr and module Event = Event
 module Element : sig
   type t = UI.element
 end
+
+module BoundingBox2d : sig
+  type t = Revery_Math.BoundingBox2d.t
+
+  val create : float -> float -> float -> float -> t
+  val getBounds : t -> float * float * float * float
+  val intersects : t -> t -> bool
+  val intersect : t -> t -> t
+  val isPointInside : x:float -> y:float -> t -> bool
+  val transform : t -> Skia.Matrix.t -> t
+  val toString : t -> string
+
+  module Mutable = Revery_Math.BoundingBox2d.Mutable
+
+  val equals : t -> t -> bool
+  val equal : t -> t -> bool
+end
