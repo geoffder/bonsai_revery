@@ -51,16 +51,25 @@ module ScrollView : sig
 end
 
 module Draggable : sig
+  type freedom =
+    | Free
+    | X
+    | Y
+
   type props =
     { styles : Style.t list
     ; attributes : Attributes.t list
     ; snap_back : bool
+    ; freedom : freedom
+    ; on_drag : (x:float -> y:float -> Event.t) option
     ; on_drop : (BoundingBox2d.t -> Event.t) option
     }
 
   val props
     :  ?attributes:Attributes.t list
     -> ?snap_back:bool
+    -> ?freedom:freedom
+    -> ?on_drag:(x:float -> y:float -> Event.t)
     -> ?on_drop:(BoundingBox2d.t -> Event.t)
     -> Style.t list
     -> props

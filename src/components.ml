@@ -710,7 +710,7 @@ module ScrollView = struct
         Event.Many
           [ inject (Dimensions (width, height)); inject (TrimChildren (Map.key_set children)) ]
       in
-      let translation key =
+      let trans key =
         Attr.
           [ style
               Style.
@@ -725,7 +725,7 @@ module ScrollView = struct
           :: on_dimensions_changed handle_dimension_change
           :: style input.styles
           :: input.attributes)
-        (Map.mapi ~f:(fun ~key ~data -> box (translation key) [ data ]) children |> Map.data)
+        (Map.mapi ~f:(fun ~key ~data -> box (trans key) [ data ]) children |> Map.data)
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
@@ -742,15 +742,24 @@ module ScrollView = struct
 end
 
 module Draggable = struct
+  type freedom =
+    | Free
+    | X
+    | Y
+  [@@deriving sexp_of]
+
   type props =
-    { styles : Style.t list
+    { styles : (Style.t[@sexp.opaque]) list
     ; attributes : Attr.t list
     ; snap_back : bool
+    ; freedom : freedom
+    ; on_drag : (x:float -> y:float -> Event.t) option
     ; on_drop : (BoundingBox2d.t -> Event.t) option
     }
+  [@@deriving sexp_of]
 
-  let props ?(attributes = []) ?(snap_back = false) ?on_drop styles =
-    { styles; attributes; snap_back; on_drop }
+  let props ?(attributes = []) ?(snap_back = false) ?(freedom = Y) ?on_drag ?on_drop styles =
+    { styles; attributes; snap_back; freedom; on_drag; on_drop }
 
 
   module T = struct
@@ -785,6 +794,13 @@ module Draggable = struct
 
     let name = "Draggable"
 
+    let translation freedom x0 y0 x1 y1 =
+      match freedom with
+      | Free -> x1 -. x0, y1 -. y0
+      | X -> x1 -. x0, 0.
+      | y -> 0., y1 -. y0
+
+
     let compute ~inject ((child, input) : Input.t) (model : Model.t) =
       let handle_mouse_down ({ button; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
         Event.Many
@@ -802,10 +818,16 @@ module Draggable = struct
             | _ -> events )
           | BUTTON_RIGHT -> [ inject Reset ]
           | _ -> [ Event.no_op ] ) in
-      let handle_mouse_move ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t) =
-        Event.Many [ inject (Drag (mouseX, mouseY)) ] in
+      let handle_mouse_move ({ mouseX = x1; mouseY = y1; _ } : Node_events.Mouse_move.t) =
+        Event.Many
+          ( match model.start with
+          | Some (x0, y0) ->
+            let x, y = translation input.freedom x0 y0 x1 y1 in
+            inject (Drag (x, y))
+            :: Option.value_map ~default:[] ~f:(fun cb -> [ cb ~x ~y ]) input.on_drag
+          | None -> [ Event.no_op ] ) in
       let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb) ] in
-      let translation = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
+      let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
 
       box
         Attr.(
@@ -813,7 +835,7 @@ module Draggable = struct
           :: on_mouse_up handle_mouse_up
           :: on_mouse_move handle_mouse_move
           :: on_bounding_box_changed handle_bounding_box_change
-          :: style (translation :: input.styles)
+          :: style (trans :: input.styles)
           :: input.attributes)
         [ child ]
 
@@ -821,10 +843,7 @@ module Draggable = struct
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
       | Grab (x, y) -> { model with start = Some (x -. model.x_trans, y -. model.y_trans) }
       | Drop -> { model with start = None }
-      | Drag (x1, y1) ->
-        ( match model.start with
-        | Some (x0, y0) -> { model with x_trans = x1 -. x0; y_trans = y1 -. y0 }
-        | None -> model )
+      | Drag (x, y) -> { model with x_trans = x; y_trans = y }
       | Reset -> { model with x_trans = 0.; y_trans = 0. }
       | SetBoundingBox bb -> { model with bounding_box = Some bb }
   end
