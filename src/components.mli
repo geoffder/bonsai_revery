@@ -50,6 +50,16 @@ module ScrollView : sig
   val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
 end
 
+module Draggable : sig
+  type props =
+    { styles : Style.t list
+    ; attributes : Attributes.t list
+    }
+
+  val props : ?attributes:Attributes.t list -> Style.t list -> props
+  val component : (Element.t * props, Element.t) Bonsai.t
+end
+
 module Expert : sig
   type 'a component =
     ?key:UI.React.Key.t

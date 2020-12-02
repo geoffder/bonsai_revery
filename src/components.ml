@@ -740,3 +740,82 @@ module ScrollView = struct
 
   let component = Bonsai.of_module (module T) ~default_model:T.Model.default
 end
+
+module Draggable = struct
+  type props =
+    { styles : Style.t list
+    ; attributes : Attr.t list
+    }
+
+  let props ?(attributes = []) styles = { styles; attributes }
+
+  module T = struct
+    module Model = struct
+      type t =
+        { start : (float * float) option
+        ; x_trans : float
+        ; y_trans : float
+        }
+      [@@deriving equal, sexp]
+
+      let default = { start = None; x_trans = 0.; y_trans = 0. }
+    end
+
+    module Action = struct
+      type t =
+        | Grab of float * float
+        | Drop
+        | Drag of float * float
+        | Reset
+      [@@deriving sexp_of]
+    end
+
+    module Input = struct
+      type t = Element.t * props
+    end
+
+    open Action
+    module Result = Element
+
+    let name = "Draggable"
+
+    let compute ~inject ((child, input) : Input.t) (model : Model.t) =
+      let handle_mouse_down ({ button; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
+        Event.Many
+          [ ( match button with
+            | BUTTON_LEFT -> inject (Grab (mouseX, mouseY))
+            | _ -> Event.no_op )
+          ] in
+      let handle_mouse_up ({ button; _ } : Node_events.Mouse_button.t) =
+        Event.Many
+          [ ( match button with
+            | BUTTON_LEFT -> inject Drop
+            | BUTTON_RIGHT -> inject Reset
+            | _ -> Event.no_op )
+          ] in
+      let handle_mouse_move ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t) =
+        Event.Many [ inject (Drag (mouseX, mouseY)) ] in
+      let translation = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
+
+      box
+        Attr.(
+          on_mouse_down handle_mouse_down
+          :: on_mouse_up handle_mouse_up
+          :: on_mouse_move handle_mouse_move
+          :: style (translation :: input.styles)
+          :: input.attributes)
+        [ child ]
+
+
+    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+      | Grab (x, y) -> { model with start = Some (x -. model.x_trans, y -. model.y_trans) }
+      | Drop -> { model with start = None }
+      | Drag (x1, y1) ->
+        ( match model.start with
+        | Some (x0, y0) -> { model with x_trans = x1 -. x0; y_trans = y1 -. y0 }
+        | None -> model )
+      | Reset -> { model with x_trans = 0.; y_trans = 0. }
+  end
+
+  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
+end
