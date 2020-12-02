@@ -611,6 +611,214 @@ module Text_input = struct
     ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component
 end
 
+module Draggable = struct
+  type freedom =
+    | Free
+    | X
+    | Y
+  [@@deriving sexp_of]
+
+  type props =
+    { styles : (Style.t[@sexp.opaque]) list
+    ; attributes : Attr.t list
+    ; snap_back : bool
+    ; freedom : freedom
+    ; on_drag : x:float -> y:float -> Event.t
+    ; on_drop : BoundingBox2d.t -> Event.t
+    }
+  [@@deriving sexp_of]
+
+  let props
+      ?(attributes = [])
+      ?(snap_back = false)
+      ?(freedom = Y)
+      ?(on_drag = fun ~x:_ ~y:_ -> Event.no_op)
+      ?(on_drop = fun _ -> Event.no_op)
+      styles
+    =
+    { styles; attributes; snap_back; freedom; on_drag; on_drop }
+
+
+  module T = struct
+    module Model = struct
+      type t =
+        { start : (float * float) option
+        ; x_trans : float
+        ; y_trans : float
+        ; bounding_box : (BoundingBox2d.t[@sexp.opaque])
+        }
+      [@@deriving equal, sexp]
+
+      let default =
+        { start = None
+        ; x_trans = 0.
+        ; y_trans = 0.
+        ; bounding_box = BoundingBox2d.create 0. 0. 1. 1.
+        }
+    end
+
+    module Action = struct
+      type t =
+        | Grab of float * float
+        | Drop
+        | Drag of float * float
+        | Reset
+        | SetBoundingBox of (BoundingBox2d.t[@sexp.opaque])
+      [@@deriving sexp_of]
+    end
+
+    module Input = struct
+      type t = Element.t * props
+    end
+
+    open Action
+    module Result = Element
+
+    let name = "Draggable"
+
+    let translation freedom x0 y0 x1 y1 =
+      match freedom with
+      | Free -> x1 -. x0, y1 -. y0
+      | X -> x1 -. x0, 0.
+      | y -> 0., y1 -. y0
+
+
+    let compute ~inject ((child, input) : Input.t) (model : Model.t) =
+      let handle_mouse_down ({ button; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
+        Event.Many
+          [ ( match button with
+            | BUTTON_LEFT -> inject (Grab (mouseX, mouseY))
+            | _ -> Event.no_op )
+          ] in
+      let handle_mouse_up ({ button; _ } : Node_events.Mouse_button.t) =
+        Event.Many
+          ( match button with
+          | BUTTON_LEFT ->
+            inject Drop
+            :: input.on_drop model.bounding_box
+            :: (if input.snap_back then [ inject Reset ] else [])
+          | BUTTON_RIGHT -> [ inject Reset ]
+          | _ -> [ Event.no_op ] ) in
+      let handle_mouse_move ({ mouseX = x1; mouseY = y1; _ } : Node_events.Mouse_move.t) =
+        Event.Many
+          ( match model.start with
+          | Some (x0, y0) ->
+            let x, y = translation input.freedom x0 y0 x1 y1 in
+            [ inject (Drag (x, y)); input.on_drag ~x ~y ]
+          | None -> [ Event.no_op ] ) in
+      let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb) ] in
+      let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
+
+      box
+        Attr.(
+          on_mouse_down handle_mouse_down
+          :: on_mouse_up handle_mouse_up
+          :: on_mouse_move handle_mouse_move
+          :: on_bounding_box_changed handle_bounding_box_change
+          :: style (trans :: input.styles)
+          :: input.attributes)
+        [ child ]
+
+
+    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+      | Grab (x, y) -> { model with start = Some (x -. model.x_trans, y -. model.y_trans) }
+      | Drop -> { model with start = None }
+      | Drag (x, y) -> { model with x_trans = x; y_trans = y }
+      | Reset -> { model with x_trans = 0.; y_trans = 0. }
+      | SetBoundingBox bb -> { model with bounding_box = bb }
+  end
+
+  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
+end
+
+module Slider = struct
+  type props =
+    { on_value_changed : float -> Event.t
+    ; vertical : bool
+    ; min_value : float
+    ; max_value : float
+    ; init_value : float
+    ; slider_length : int
+    ; thumb_length : int option
+    ; thumb_thickness : int
+    ; track_thickness : int
+    ; max_track_color : (Color.t[@sexp.opaque])
+    ; min_track_color : (Color.t[@sexp.opaque])
+    ; thumb_color : (Color.t[@sexp.opaque])
+    }
+  [@@deriving sexp_of]
+
+  let props
+      ?(on_value_changed = fun _ -> Event.no_op)
+      ?(vertical = false)
+      ?(min_value = 0.)
+      ?(max_value = 1.)
+      ?(init_value = 0.)
+      ?(slider_length = 100)
+      ?(thumb_length = Some 15)
+      ?(thumb_thickness = 15)
+      ?(track_thickness = 5)
+      ?(max_track_color = Colors.dark_gray)
+      ?(min_track_color = Color.hex "#90f7ff")
+      ?(thumb_color = Colors.gray)
+      ()
+    =
+    { on_value_changed
+    ; vertical
+    ; min_value
+    ; max_value
+    ; init_value
+    ; slider_length
+    ; thumb_length
+    ; thumb_thickness
+    ; track_thickness
+    ; max_track_color
+    ; min_track_color
+    ; thumb_color
+    }
+
+
+  module T = struct
+    module Model = struct
+      type t =
+        { value : float option
+        ; bounding_box : (BoundingBox2d.t[@sexp.opaque])
+        }
+      [@@deriving equal, sexp]
+
+      let default = { value = None; bounding_box = BoundingBox2d.create 0. 0. 1. 1. }
+    end
+
+    module Action = struct
+      type t =
+        | Slide of float
+        | SetBoundingBox of (BoundingBox2d.t[@sexp.opaque])
+      [@@deriving sexp_of]
+    end
+
+    module Input = struct
+      type t = Element.t * props
+    end
+
+    open Action
+
+    module Result = struct
+      (* TODO: What should be here (in addition to the element)? value, set max callback (any other
+         params need to be set by scrollview?) *)
+      type t = float * (float -> Event.t) * Element.t
+    end
+
+    let name = "Slider"
+    let compute ~inject ((bar, input) : Input.t) (model : Model.t) = ()
+
+    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+      | Slide v -> { model with value = Some v }
+      | SetBoundingBox bb -> { model with bounding_box = bb }
+  end
+
+  (* let component = Bonsai.of_module (module T) ~default_model:T.Model.default *)
+end
+
 module ScrollView = struct
   type props =
     { speed : float
@@ -736,116 +944,6 @@ module ScrollView = struct
         { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
       | TrimChildren keys ->
         { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
-  end
-
-  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
-end
-
-module Draggable = struct
-  type freedom =
-    | Free
-    | X
-    | Y
-  [@@deriving sexp_of]
-
-  type props =
-    { styles : (Style.t[@sexp.opaque]) list
-    ; attributes : Attr.t list
-    ; snap_back : bool
-    ; freedom : freedom
-    ; on_drag : (x:float -> y:float -> Event.t) option
-    ; on_drop : (BoundingBox2d.t -> Event.t) option
-    }
-  [@@deriving sexp_of]
-
-  let props ?(attributes = []) ?(snap_back = false) ?(freedom = Y) ?on_drag ?on_drop styles =
-    { styles; attributes; snap_back; freedom; on_drag; on_drop }
-
-
-  module T = struct
-    module Model = struct
-      type t =
-        { start : (float * float) option
-        ; x_trans : float
-        ; y_trans : float
-        ; bounding_box : (BoundingBox2d.t option[@sexp.opaque])
-        }
-      [@@deriving equal, sexp]
-
-      let default = { start = None; x_trans = 0.; y_trans = 0.; bounding_box = None }
-    end
-
-    module Action = struct
-      type t =
-        | Grab of float * float
-        | Drop
-        | Drag of float * float
-        | Reset
-        | SetBoundingBox of (BoundingBox2d.t[@sexp.opaque])
-      [@@deriving sexp_of]
-    end
-
-    module Input = struct
-      type t = Element.t * props
-    end
-
-    open Action
-    module Result = Element
-
-    let name = "Draggable"
-
-    let translation freedom x0 y0 x1 y1 =
-      match freedom with
-      | Free -> x1 -. x0, y1 -. y0
-      | X -> x1 -. x0, 0.
-      | y -> 0., y1 -. y0
-
-
-    let compute ~inject ((child, input) : Input.t) (model : Model.t) =
-      let handle_mouse_down ({ button; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
-        Event.Many
-          [ ( match button with
-            | BUTTON_LEFT -> inject (Grab (mouseX, mouseY))
-            | _ -> Event.no_op )
-          ] in
-      let handle_mouse_up ({ button; _ } : Node_events.Mouse_button.t) =
-        Event.Many
-          ( match button with
-          | BUTTON_LEFT ->
-            let events = inject Drop :: (if input.snap_back then [ inject Reset ] else []) in
-            ( match input.on_drop, model.bounding_box with
-            | Some cb, Some bb -> cb bb :: events
-            | _ -> events )
-          | BUTTON_RIGHT -> [ inject Reset ]
-          | _ -> [ Event.no_op ] ) in
-      let handle_mouse_move ({ mouseX = x1; mouseY = y1; _ } : Node_events.Mouse_move.t) =
-        Event.Many
-          ( match model.start with
-          | Some (x0, y0) ->
-            let x, y = translation input.freedom x0 y0 x1 y1 in
-            inject (Drag (x, y))
-            :: Option.value_map ~default:[] ~f:(fun cb -> [ cb ~x ~y ]) input.on_drag
-          | None -> [ Event.no_op ] ) in
-      let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb) ] in
-      let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
-
-      box
-        Attr.(
-          on_mouse_down handle_mouse_down
-          :: on_mouse_up handle_mouse_up
-          :: on_mouse_move handle_mouse_move
-          :: on_bounding_box_changed handle_bounding_box_change
-          :: style (trans :: input.styles)
-          :: input.attributes)
-        [ child ]
-
-
-    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
-      | Grab (x, y) -> { model with start = Some (x -. model.x_trans, y -. model.y_trans) }
-      | Drop -> { model with start = None }
-      | Drag (x, y) -> { model with x_trans = x; y_trans = y }
-      | Reset -> { model with x_trans = 0.; y_trans = 0. }
-      | SetBoundingBox bb -> { model with bounding_box = Some bb }
   end
 
   let component = Bonsai.of_module (module T) ~default_model:T.Model.default

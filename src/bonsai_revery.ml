@@ -128,8 +128,8 @@ module Components : sig
       ; attributes : Attr.t list
       ; snap_back : bool
       ; freedom : freedom
-      ; on_drag : (x:float -> y:float -> Event.t) option
-      ; on_drop : (Import.BoundingBox2d.t -> Event.t) option
+      ; on_drag : x:float -> y:float -> Event.t
+      ; on_drop : Import.BoundingBox2d.t -> Event.t
       }
 
     val props
