@@ -119,16 +119,18 @@ module Components : sig
   end
 
   module Draggable : sig
-    type freedom =
-      | Free
-      | X
-      | Y
+    type bounds =
+      { x_min : float option
+      ; y_min : float option
+      ; x_max : float option
+      ; y_max : float option
+      }
 
     type props =
       { styles : Style.t list
       ; attributes : Attr.t list
       ; snap_back : bool
-      ; freedom : freedom
+      ; bounds : bounds
       ; on_drag : x:float -> y:float -> Event.t
       ; on_drop : Import.BoundingBox2d.t -> Event.t
       }
@@ -136,13 +138,46 @@ module Components : sig
     val props
       :  ?attributes:Attributes.t list
       -> ?snap_back:bool
-      -> ?freedom:freedom
+      -> ?bounds:bounds
       -> ?on_drag:(x:float -> y:float -> Event.t)
       -> ?on_drop:(Import.BoundingBox2d.t -> Event.t)
       -> Style.t list
       -> props
 
-    val component : (Element.t * props, Element.t) Bonsai.t
+    val component : (Element.t * props, Import.BoundingBox2d.t * Element.t) Bonsai.t
+  end
+
+  module Slider : sig
+    type props =
+      { on_value_changed : float -> Event.t
+      ; vertical : bool
+      ; min_value : float
+      ; max_value : float
+      ; init_value : float
+      ; slider_length : int
+      ; track_thickness : int
+      ; track_color : Color.t
+      ; thumb : Draggable.props
+      }
+
+    val props
+      :  ?on_value_changed:(float -> Import.Event.t)
+      -> ?vertical:bool
+      -> ?min_value:float
+      -> ?max_value:float
+      -> ?init_value:float
+      -> ?slider_length:int
+      -> ?thumb_length:int
+      -> ?thumb_thickness:int
+      -> ?track_thickness:int
+      -> ?track_color:Color.t
+      -> ?thumb_color:Color.t
+      -> unit
+      -> props
+
+    (** val component * : props * -> (Import.BoundingBox2d.t * Element.t * props, float * Element.t)
+        Bonsai.t *)
+    val component : (props, float * Element.t) Bonsai.t
   end
 
   module Expert : sig

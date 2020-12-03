@@ -435,6 +435,11 @@ let add_todo =
   Components.Add_todo.view ~all_completed ~on_toggle_all:(inject Action.Toggle_all) [ text_input ]
 
 
+let slider =
+  let props = Slider.props ~max_value:100. ~vertical:false () in
+  Bonsai.pure ~f:(fun (_, _) -> props) >>> Slider.component
+
+
 let footer =
   Bonsai.pure ~f:(fun (model, inject) ->
       let completed_count = Map.count model.Model.todos ~f:Todo.completed in
@@ -478,12 +483,22 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
-      and bonsai = drag_bonsai
+      and _, bonsai = drag_bonsai
+      and value, slider = slider
       and footer = footer in
-      let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
+      let title =
+        text
+          Attr.[ style Styles.title; kind Styles.title_font ]
+          Float.(round_significant ~significant_digits:2 value |> to_string) in
+      (* let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in *)
       let header =
         box
           Attr.[ style Style.[ flex_grow 0; justify_content `FlexStart; flex_direction `Row ] ]
-          [ bonsai; title ] in
+          [ bonsai
+          ; title
+          ; box
+              Attr.[ style Style.[ position `Absolute; top 30; left 700; bottom 0; right 0 ] ]
+              [ slider ]
+          ] in
 
       box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]
