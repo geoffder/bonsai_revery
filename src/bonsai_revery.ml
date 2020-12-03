@@ -49,6 +49,7 @@ module Attr : sig
   val on_mouse_leave : (Mouse_move.t -> Event.t) -> t
   val on_mouse_over : (Mouse_move.t -> Event.t) -> t
   val on_mouse_out : (Mouse_move.t -> Event.t) -> t
+  val on_bounding_box_changed : (Import.BoundingBox2d.t -> Event.t) -> t
   val on_dimensions_changed : (Dimensions_changed.t -> Event.t) -> t
   val on_focus : Event.t -> t
   val on_blur : Event.t -> t
@@ -181,3 +182,7 @@ end
 
 (** Mirror of [Revery_UI] for advanced uses *)
 module UI = UI
+
+module BoundingBox2d = struct
+  include Import.BoundingBox2d
+end
