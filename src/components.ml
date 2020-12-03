@@ -617,7 +617,8 @@ module Draggable = struct
 
   (* NOTE: Might consider adding an an attribute to govern whether a box gives up capture when the
      mouse leaves it's area while the mouse button is down. It doesn't feel great when trying to
-     move a slider when capture is lost. *)
+     move a slider when capture is lost. UPDATE: Tried to prevent capture loss by removing it from
+     the clickable_box on leave callbacks and was unsuccessful. What would actually need to change? *)
   type bounds =
     { x_min : float option
     ; y_min : float option

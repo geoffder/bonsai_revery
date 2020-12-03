@@ -107,7 +107,6 @@ module Slider : sig
     -> unit
     -> props
 
-  (** val component : props -> (BoundingBox2d.t * Element.t * props, float * Element.t) Bonsai.t *)
   val component : (props, float * Element.t) Bonsai.t
 end
 
