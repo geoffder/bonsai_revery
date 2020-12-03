@@ -919,12 +919,19 @@ module ScrollView = struct
         ; y_pos : float
         ; width : int
         ; height : int
+        ; child_count : int
         ; child_dims : (int * int) Map.M(Int).t
         }
       [@@deriving equal, sexp]
 
       let default =
-        { x_pos = 0.; y_pos = 0.; width = 0; height = 0; child_dims = Map.empty (module Int) }
+        { x_pos = 0.
+        ; y_pos = 0.
+        ; width = 0
+        ; height = 0
+        ; child_count = 0
+        ; child_dims = Map.empty (module Int)
+        }
     end
 
     module Action = struct
@@ -932,6 +939,7 @@ module ScrollView = struct
         | HorizontalScroll of float
         | VerticalScroll of float
         | Dimensions of int * int
+        | Count of int
         | ChildDimensions of int * int * int
         | TrimChildren of Set.M(Int).t
       [@@deriving sexp_of]
@@ -962,6 +970,17 @@ module ScrollView = struct
       let fudge_height = Float.(if diff_height > 0. then of_int model.height * 0.05 else 0.) in
       let fudge_width = Float.(if diff_width > 0. then of_int model.width * 0.05 else 0.) in
 
+      let count = Map.length children in
+      if count <> model.child_count
+      then
+        Event.Many
+          [ inject (Count count)
+          ; ( if count < model.child_count
+            then inject (TrimChildren (Map.key_set children))
+            else Event.no_op )
+          ]
+        |> Event.Expert.handle;
+
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let delta = deltaY *. props.speed in
         let event =
@@ -979,9 +998,7 @@ module ScrollView = struct
           | false, _ -> Event.no_op in
         Event.Many [ event ] in
       let handle_dimension_change ({ width; height } : Node_events.Dimensions_changed.t) =
-        Event.Many
-          [ inject (Dimensions (width, height)); inject (TrimChildren (Map.key_set children)) ]
-      in
+        Event.Many [ inject (Dimensions (width, height)) ] in
       let trans key =
         Attr.
           [ style
@@ -1004,6 +1021,7 @@ module ScrollView = struct
       | HorizontalScroll x_pos -> { model with x_pos }
       | VerticalScroll y_pos -> { model with y_pos }
       | Dimensions (width, height) -> { model with width; height }
+      | Count n -> { model with child_count = n }
       | ChildDimensions (key, w, h) ->
         { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
       | TrimChildren keys ->
