@@ -75,7 +75,7 @@ module Theme = struct
   let app_background = Color.hex "#f4edfe"
   let text_color = Color.hex "#513B70"
   let dimmed_text_color = Color.hex "#DAC5F7"
-  let title_text_color = Color.hex "#EADDFC"
+  let title_text_color = Color.hex "#D1C3E3"
   let panel_background = Color.hex "#F9F5FF"
   let panel_border_color = Color.hex "#EADDFC"
   let panel_border = Style.border ~width:1 ~color:panel_border_color
@@ -104,31 +104,22 @@ module Styles = struct
       ]
 
 
-  let bonsai = Style.[ align_self `FlexStart; width 150; height 150; margin_bottom 10 ]
-
-  let bonsai_box =
-    Style.
-      [ align_items `Center
-      ; justify_content `FlexStart
-      ; flex_grow 0
-      ; margin_top (Theme.remi 2.)
-      ; margin_bottom (Theme.remi 2.)
-      ; margin_left 50
-      ; margin_right 100
-      ]
-
-
-  let title =
-    Style.
-      [ color Theme.title_text_color
-      ; align_self `Center
-      ; margin_top (Theme.remi 2.)
-      ; text_wrap NoWrap
-      ]
-
+  let bonsai = Style.[ width 150; height 150; margin_bottom 10 ]
+  let bonsai_box = Style.[ align_items `Center ]
+  let title = Style.[ color Theme.title_text_color; align_self `Center; text_wrap NoWrap ]
 
   let title_font =
     Attr.KindSpec.update_text ~f:(fun a -> { a with size = Theme.rem 4. }) Theme.font_info
+
+
+  let header =
+    Style.
+      [ flex_grow 0
+      ; align_items `Center
+      ; justify_content `SpaceBetween
+      ; flex_direction `Row
+      ; padding 20
+      ]
 end
 
 module Components = struct
@@ -436,15 +427,30 @@ let add_todo =
 
 
 let slider =
-  let props = Slider.props ~max_value:100. ~vertical:false () in
+  let props =
+    Slider.props
+      ~track_color:Theme.dimmed_text_color
+      ~thumb_color:(Color.hex "#9D77D1")
+      ~max_value:100.
+      ~vertical:false
+      () in
   Bonsai.pure ~f:(fun (_, _) -> props) >>> Slider.component
+
+
+let slider_box =
+  let%map.Bonsai model, inject = Bonsai.pure ~f:Fn.id
+  and value, slider = slider in
+  let display =
+    text
+      Attr.[ style Style.[ color Theme.title_text_color; margin_top 5 ]; kind Theme.font_info ]
+      Int.(of_float value |> to_string) in
+  box Attr.[ style Style.[ align_items `Center ] ] [ slider; display ]
 
 
 let footer =
   Bonsai.pure ~f:(fun (model, inject) ->
       let completed_count = Map.count model.Model.todos ~f:Todo.completed in
       let active_count = Map.length model.todos - completed_count in
-
       Components.Footer.view ~inject ~active_count ~completed_count ~current_filter:model.filter)
 
 
@@ -484,21 +490,8 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
       and _, bonsai = drag_bonsai
-      and value, slider = slider
+      and slider_box = slider_box
       and footer = footer in
-      let title =
-        text
-          Attr.[ style Styles.title; kind Styles.title_font ]
-          Float.(round_significant ~significant_digits:2 value |> to_string) in
-      (* let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in *)
-      let header =
-        box
-          Attr.[ style Style.[ flex_grow 0; justify_content `FlexStart; flex_direction `Row ] ]
-          [ bonsai
-          ; title
-          ; box
-              Attr.[ style Style.[ position `Absolute; top 30; left 700; bottom 0; right 0 ] ]
-              [ slider ]
-          ] in
-
+      let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
+      let header = box Attr.[ style Styles.header ] [ bonsai; title; slider_box ] in
       box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]
