@@ -104,25 +104,6 @@ module Components : sig
     val component : (props, string * (string -> Event.t) * Element.t) Bonsai.t
   end
 
-  module ScrollView : sig
-    type props =
-      { speed : float
-      ; styles : Style.t list
-      ; attributes : Attr.t list
-      }
-
-    val props : ?speed:float -> ?attributes:Attr.t list -> Style.t list -> props
-
-    open Core_kernel
-
-    val component
-      : ( [ `Controlled of float option * float option | `Uncontrolled ]
-          * Element.t Map.M(Int).t
-          * props
-        , Element.t )
-        Bonsai.t
-  end
-
   module Draggable : sig
     type bounds =
       { x_min : float option
@@ -181,6 +162,42 @@ module Components : sig
       -> props
 
     val component : (props, float * Element.t) Bonsai.t
+  end
+
+  module ScrollView : sig
+    type props =
+      { speed : float
+      ; styles : Style.t list
+      ; attributes : Attr.t list
+      ; x_slider : Slider.props
+      ; y_slider : Slider.props
+      }
+
+    val props : ?speed:float -> ?attributes:Attr.t list -> Style.t list -> props
+
+    open Core_kernel
+
+    module T : sig
+      module Input : sig
+        type slider =
+          { ele : Element.t
+          ; resize :
+              [ `Scale of float option * float option | `Set of int option * int option ] -> Event.t
+          }
+
+        type sliders = { y : slider }
+      end
+    end
+
+    val props
+      :  ?speed:float
+      -> ?attributes:Attributes.t list
+      -> ?track_color:Color.t
+      -> ?thumb_color:Color.t
+      -> Style.t list
+      -> props
+
+    val with_sliders : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
   end
 
   module Expert : sig

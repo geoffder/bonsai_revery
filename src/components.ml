@@ -611,6 +611,107 @@ module Text_input = struct
     ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component
 end
 
+module Resizable = struct
+  type props =
+    { styles : (Style.t[@sexp.opaque]) list
+    ; attributes : Attr.t list
+    ; max_width : int option
+    ; max_height : int option
+    }
+  [@@deriving sexp_of]
+
+  let props ?(attributes = []) ?max_width ?max_height styles =
+    { styles; attributes; max_width; max_height }
+
+
+  module T = struct
+    module Model = struct
+      type t =
+        { set_width : int option
+        ; set_height : int option
+        ; start_width : int option
+        ; start_height : int option
+        }
+      [@@deriving equal, sexp]
+
+      let default = { set_width = None; set_height = None; start_width = None; start_height = None }
+    end
+
+    module Action = struct
+      type resize =
+        [ `Scale of float option * float option
+        | `Set of int option * int option
+        ]
+      [@@deriving sexp_of]
+
+      type t =
+        | Resize of resize
+        | OriginalDimensions of (int * int)
+      [@@deriving sexp_of]
+    end
+
+    module Input = struct
+      type t = Element.t * props
+    end
+
+    open Action
+
+    module Result = struct
+      type t = (resize -> Event.t) * Element.t
+    end
+
+    let name = "Resizable"
+
+    let compute ~inject ((child, props) : Input.t) (model : Model.t) =
+      let resize r = Event.Many [ inject (Resize r) ] in
+      let handle_dimensions_changed ({ width; height } : Node_events.Dimensions_changed.t) =
+        Event.Many [ inject (OriginalDimensions (width, height)) ] in
+      let changed =
+        List.filter_opt
+          Style.[ Option.map ~f:width model.set_width; Option.map ~f:height model.set_height ] in
+      let s = List.filter_opt [ model.set_width; model.set_height ] in
+      Log.perf (sprintf "changed: %s" (List.to_string ~f:Int.to_string s)) (fun () -> ());
+      let element =
+        box
+          Attr.(
+            style (props.styles @ changed)
+            :: on_dimensions_changed handle_dimensions_changed
+            :: props.attributes)
+          [ child ] in
+      resize, element
+
+
+    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+      | OriginalDimensions (w, h) ->
+        if Option.is_none model.start_width
+        then { model with start_width = Some w; start_height = Some h }
+        else model
+      | Resize (`Set (w_opt, h_opt)) ->
+        ( match w_opt, h_opt with
+        | (Some _ as w), (Some _ as h) -> { model with set_width = w; set_height = h }
+        | (Some _ as w), None -> { model with set_width = w }
+        | None, (Some _ as h) -> { model with set_height = h }
+        | None, None -> model )
+      | Resize (`Scale (w_mul_opt, h_mul_opt)) ->
+        ( match model.start_width, model.start_height with
+        | Some w0, Some h0 ->
+          let w0 = Float.of_int w0 in
+          let h0 = Float.of_int h0 in
+          ( match w_mul_opt, h_mul_opt with
+          | Some w_mul, Some h_mul ->
+            { model with
+              set_width = Some (Int.of_float (w_mul *. w0))
+            ; set_height = Some (Int.of_float (h_mul *. h0))
+            }
+          | Some w_mul, None -> { model with set_width = Some (Int.of_float (w_mul *. w0)) }
+          | None, Some h_mul -> { model with set_height = Some (Int.of_float (h_mul *. h0)) }
+          | None, None -> model )
+        | _ -> model )
+  end
+
+  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
+end
+
 module Draggable = struct
   (* NOTE: See Set_input_node and Set_text_node and using the node_red callback usage in Text_input
      in order to get the actual nodes that underlie the elements (to get measurements from etc). *)
@@ -653,7 +754,8 @@ module Draggable = struct
       type t =
         { start : (float * float) option
         ; x_trans : float
-        ; y_trans : float
+        ; y_trans : float (* ; set_w : int option
+                           * ; set_h : int option *)
         ; bounding_box : (BoundingBox2d.t[@sexp.opaque])
         }
       [@@deriving equal, sexp]
@@ -661,7 +763,8 @@ module Draggable = struct
       let default =
         { start = None
         ; x_trans = 0.
-        ; y_trans = 0.
+        ; y_trans = 0. (* ; set_w = None
+                        * ; set_h = None *)
         ; bounding_box = BoundingBox2d.create 0. 0. 1. 1.
         }
     end
@@ -673,6 +776,7 @@ module Draggable = struct
         | Drag of float * float
         | Reset
         | SetBoundingBox of (BoundingBox2d.t[@sexp.opaque])
+      (* | SetDims of int * int *)
       [@@deriving sexp_of]
     end
 
@@ -723,9 +827,14 @@ module Draggable = struct
       let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb) ] in
       let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
 
+      (* let set_dims w h = Event.Many [ inject (SetDims (w, h)) ] in *)
+      (* let changed =
+       *   List.filter_opt Style.[ Option.map ~f:width model.set_w; Option.map ~f:height model.set_h ]
+       * in *)
       let element =
         box
           Attr.(
+            (* :: style ((trans :: props.styles) @ changed) *)
             on_mouse_down handle_mouse_down
             :: on_mouse_up handle_mouse_up
             :: on_mouse_move handle_mouse_move
@@ -733,6 +842,7 @@ module Draggable = struct
             :: style (trans :: props.styles)
             :: props.attributes)
           [ child ] in
+      (* model.bounding_box, set_dims, element *)
       model.bounding_box, element
 
 
@@ -742,6 +852,8 @@ module Draggable = struct
       | Drag (x, y) -> { model with x_trans = x; y_trans = y }
       | Reset -> { model with x_trans = 0.; y_trans = 0. }
       | SetBoundingBox bb -> { model with bounding_box = bb }
+
+    (* | SetDims (w, h) -> { model with set_w = Some w; set_h = Some h } *)
   end
 
   let component = Bonsai.of_module (module T) ~default_model:T.Model.default
@@ -761,6 +873,7 @@ module Slider = struct
     }
   [@@deriving sexp_of]
 
+  (* TODO: Make length fully optional? Then go off of current dimensions with flex on if not set? *)
   let props
       ?(on_value_changed = fun _ -> Event.no_op)
       ?(vertical = true)
@@ -853,7 +966,10 @@ module Slider = struct
         Style.
           [ background_color props.track_color
           ; width (if props.vertical then props.track_thickness else props.slider_length)
-          ; height (if props.vertical then props.slider_length else props.track_thickness)
+            (* ; height (if props.vertical then props.slider_length else props.track_thickness) *)
+            (* ; height (if props.vertical then 0 else props.track_thickness) *)
+          ; flex_direction `Column
+          ; flex_grow 1
           ] in
       let element =
         box Attr.[ on_bounding_box_changed handle_bounding_box_change; style styles ] [ bar ] in
@@ -864,14 +980,13 @@ module Slider = struct
       | SetBoundingBox bb -> { model with bounding_box = Some bb }
   end
 
-  let component_v1 =
-    let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
-    let pure = Bonsai.pure ~f:(fun (props : props) -> text [] "", props.thumb) in
-    Bonsai.Arrow.partial_compose_first
-      (pure >>> Draggable.component >>| fun (bb, draggable) -> (bb, draggable), ())
-      ((fun (props, (bb, draggable)) -> bb, draggable, props) @>> component)
-    >>| fun ((), (value, slider)) -> value, slider
-
+  (* let component_v1 =
+   *   let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
+   *   let pure = Bonsai.pure ~f:(fun (props : props) -> text [] "", props.thumb) in
+   *   Bonsai.Arrow.partial_compose_first
+   *     (pure >>> Draggable.component >>| fun (bb, draggable) -> (bb, draggable), ())
+   *     ((fun (props, (bb, draggable)) -> bb, draggable, props) @>> component)
+   *   >>| fun ((), (value, slider)) -> value, slider *)
 
   (* I think this version is a bit cleaner. *)
   let component =
@@ -888,10 +1003,17 @@ module ScrollView = struct
     { speed : float
     ; styles : (Style.t[@sexp.opaque]) list
     ; attributes : Attr.t list
+    ; x_slider : Slider.props
+    ; y_slider : Slider.props
     }
   [@@deriving sexp_of]
 
-  let props ?(speed = 25.) ?(attributes = []) styles = { speed; styles; attributes }
+  let props ?(speed = 25.) ?(attributes = []) ?track_color ?thumb_color styles =
+    let common = Slider.props ?track_color ?thumb_color in
+    let x_slider = common ~vertical:false () in
+    let y_slider = common ~vertical:true () in
+    { speed; styles; attributes; x_slider; y_slider }
+
 
   let is_mac =
     Revery.Environment.(
@@ -919,6 +1041,8 @@ module ScrollView = struct
         ; y_pos : float
         ; width : int
         ; height : int
+        ; scroll_width : float
+        ; scroll_height : float
         ; child_count : int
         ; child_dims : (int * int) Map.M(Int).t
         }
@@ -929,6 +1053,8 @@ module ScrollView = struct
         ; y_pos = 0.
         ; width = 0
         ; height = 0
+        ; scroll_width = 0.
+        ; scroll_height = 0.
         ; child_count = 0
         ; child_dims = Map.empty (module Int)
         }
@@ -938,6 +1064,7 @@ module ScrollView = struct
       type t =
         | Scroll of float * float
         | Dimensions of int * int
+        | Scrollable of float * float
         | Count of int
         | ChildDimensions of int * int * int
         | TrimChildren of Set.M(Int).t
@@ -950,7 +1077,16 @@ module ScrollView = struct
         | `Controlled of float option * float option
         ]
 
-      type t = control * Element.t Map.M(Int).t * props
+      type slider =
+        { ele : Element.t
+        ; resize :
+            [ `Scale of float option * float option | `Set of int option * int option ] -> Event.t
+        }
+
+      type sliders = { (* x : slider *)
+                       y : slider }
+
+      type t = control * sliders * Element.t Map.M(Int).t * props
     end
 
     open Action
@@ -975,7 +1111,7 @@ module ScrollView = struct
       w, h
 
 
-    let compute ~inject ((control, children, props) : Input.t) (model : Model.t) =
+    let compute ~inject ((control, sliders, children, props) : Input.t) (model : Model.t) =
       let count = Map.length children in
       if count <> model.child_count
       then
@@ -989,6 +1125,14 @@ module ScrollView = struct
 
       let scroll_width, scroll_height =
         scrollable (is_columnar props.styles) model.width model.height model.child_dims in
+
+      if Float.(model.scroll_width <> scroll_width || model.scroll_height <> scroll_height)
+      then
+        Event.Many
+          [ inject (Scrollable (scroll_width, scroll_height))
+          ; sliders.y.resize (`Set (None, Some (Int.of_float scroll_height)))
+          ]
+        |> Event.Expert.handle;
 
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
         let x_lock, y_lock =
@@ -1025,13 +1169,19 @@ module ScrollView = struct
                 Event.Many [ inject (ChildDimensions (key, width, height)) ])
           ] in
 
+      let view =
+        box
+          Attr.(
+            on_mouse_wheel handle_wheel
+            :: on_dimensions_changed handle_dimension_change
+            :: style props.styles
+            :: props.attributes)
+          (Map.mapi ~f:(fun ~key ~data -> box (trans key) [ data ]) children |> Map.data) in
+
+      (* List.rev to overwrite styles *)
       box
-        Attr.(
-          on_mouse_wheel handle_wheel
-          :: on_dimensions_changed handle_dimension_change
-          :: style props.styles
-          :: props.attributes)
-        (Map.mapi ~f:(fun ~key ~data -> box (trans key) [ data ]) children |> Map.data)
+        Attr.[ style Style.(flex_direction `Row :: props.styles |> List.rev) ]
+        [ view; sliders.y.ele ]
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
@@ -1042,7 +1192,46 @@ module ScrollView = struct
         { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
       | TrimChildren keys ->
         { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
+      | Scrollable (w, h) -> { model with scroll_width = w; scroll_height = h }
   end
 
-  let component = Bonsai.of_module (module T) ~default_model:T.Model.default
+  (* let component = Bonsai.of_module (module T) ~default_model:T.Model.default *)
+
+  let slider_props ax props =
+    match ax with
+    | `X -> props.x_slider
+    | `Y -> props.y_slider
+
+
+  (* NOTE: I actually don't know yet whether the resize component is workable for this or whether
+     the resizing should just live in slider, since I think I am still over-writing the size info
+     when building the slider component anyway. So, need to test that out as well as thinking about
+     how to make the slider component more flexible in general. Not the end of the world, I've got
+     most of the pieces that would be rearranged anyway. Having just tried again, I'm not sure that
+     it is in the cards. In thumb props, I can indicate how the thumb should be controlled along
+     with the track length via optional args (without defaults). Fixed and dynamic props profiles
+     could make things friendly as well.*)
+  let with_sliders =
+    let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
+    let thumb =
+      Bonsai.Arrow.pipe
+        ( Bonsai.pure ~f:(fun (children, (props : props)) ->
+              let resize_props =
+                Resizable.props
+                  ~attributes:props.y_slider.thumb.attributes
+                  (props.y_slider.thumb.styles @ Style.[ flex_grow 1 ]) in
+              text Attr.[ style Style.[ flex_grow 1 ] ] "", resize_props)
+        >>> Resizable.component )
+        ~via:(fun (_, props) (resize, thumb) -> thumb, props.y_slider.thumb)
+        ~into:Draggable.component
+        ~finalize:(fun props (resize, thumb) (bb, draggable) -> bb, resize, draggable) in
+    let slider =
+      Bonsai.Arrow.pipe
+        thumb
+        ~via:(fun (children, props) (bb, resize, draggable) -> props.y_slider)
+        ~into:Slider.component
+        ~finalize:(fun (children, props) (bb, resize, draggable) (value, slider) ->
+          let sliders = T.Input.{ y = { ele = slider; resize } } in
+          `Controlled (None, Some value), sliders, children, props) in
+    slider >>> component
 end

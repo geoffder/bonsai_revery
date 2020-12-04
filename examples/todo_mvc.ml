@@ -382,14 +382,23 @@ let todo_list =
   @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component
 
 
+(* let scroll_view_list =
+ *   Bonsai.map todo_list ~f:(fun children ->
+ *       ( `Uncontrolled
+ *       , children
+ *       , ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] ))
+ *   >>> ScrollView.component *)
+
 let scroll_view_list =
-  Bonsai.map todo_list ~f:(fun children ->
-      ( `Uncontrolled
-      , children
-      , ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] ))
-  >>> ScrollView.component
+  let props =
+    ScrollView.props
+      ~track_color:Theme.dimmed_text_color
+      ~thumb_color:(Color.hex "#9D77D1")
+      Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] in
+  Bonsai.map todo_list ~f:(fun children -> children, props) >>> ScrollView.with_sliders
 
 
+(* Same but with a slider to control the vertical scroll, disables mouse wheel control. *)
 (* let scroll_view_list =
  *   let slider =
  *     Bonsai.pure ~f:(fun (_, _) ->
