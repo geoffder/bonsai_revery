@@ -382,7 +382,7 @@ let todo_list =
   @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component
 
 
-let scroll_view_list' =
+let scroll_view_list =
   Bonsai.map todo_list ~f:(fun children ->
       ( `Uncontrolled
       , children
@@ -390,25 +390,24 @@ let scroll_view_list' =
   >>> ScrollView.component
 
 
-let scroll_view_list =
-  let slider =
-    Bonsai.pure ~f:(fun (_, _) ->
-        Slider.props
-          ~track_color:Theme.dimmed_text_color
-          ~thumb_color:(Color.hex "#9D77D1")
-          ~max_value:1.
-          ~vertical:false
-          ())
-    >>> Slider.component in
-  Bonsai.Arrow.pipe
-    (Bonsai.both slider todo_list)
-    ~via:(fun _ ((value, slider), todos) ->
-      ( `Controlled (None, Some value)
-      , todos
-      , ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] ))
-    ~into:ScrollView.component
-    ~finalize:(fun _ ((_, slider), _) scroll_view -> slider, scroll_view)
-
+(* let scroll_view_list =
+ *   let slider =
+ *     Bonsai.pure ~f:(fun (_, _) ->
+ *         Slider.props
+ *           ~track_color:Theme.dimmed_text_color
+ *           ~thumb_color:(Color.hex "#9D77D1")
+ *           ~max_value:1.
+ *           ~vertical:false
+ *           ())
+ *     >>> Slider.component in
+ *   Bonsai.Arrow.pipe
+ *     (Bonsai.both slider todo_list)
+ *     ~via:(fun _ ((value, slider), todos) ->
+ *       ( `Controlled (None, Some value)
+ *       , todos
+ *       , ScrollView.props Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] ))
+ *     ~into:ScrollView.component
+ *     ~finalize:(fun _ ((_, slider), _) scroll_view -> slider, scroll_view) *)
 
 let drag_bonsai =
   let img =
@@ -509,18 +508,19 @@ let state_component =
 
 let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
-  >>> let%map.Bonsai scroller, scroll_view_list = scroll_view_list
+  (* >>> let%map.Bonsai scroller, scroll_view_list = scroll_view_list *)
+  >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
       and _, bonsai = drag_bonsai
       and slider_box = slider_box
       and footer = footer in
       let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
       let header = box Attr.[ style Styles.header ] [ bonsai; title; slider_box ] in
-      let footer =
-        box
-          Attr.
-            [ style Style.[ align_items `Center; flex_direction `Row; justify_content `FlexStart ] ]
-          [ box Attr.[ style Style.[ margin_right 10 ] ] [ scroller ]
-          ; box Attr.[ style Style.[ flex_direction `Row; flex_shrink 1 ] ] [ footer ]
-          ] in
+      (* let footer =
+       *   box
+       *     Attr.
+       *       [ style Style.[ align_items `Center; flex_direction `Row; justify_content `FlexStart ] ]
+       *     [ box Attr.[ style Style.[ margin_right 10 ] ] [ scroller ]
+       *     ; box Attr.[ style Style.[ flex_direction `Row; flex_shrink 1 ] ] [ footer ]
+       *     ] in *)
       box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]
