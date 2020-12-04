@@ -115,7 +115,12 @@ module Components : sig
 
     open Core_kernel
 
-    val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
+    val component
+      : ( [ `Controlled of float option * float option | `Uncontrolled ]
+          * Element.t Map.M(Int).t
+          * props
+        , Element.t )
+        Bonsai.t
   end
 
   module Draggable : sig

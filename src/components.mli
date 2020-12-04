@@ -47,7 +47,13 @@ module ScrollView : sig
     }
 
   val props : ?speed:float -> ?attributes:Attributes.t list -> Style.t list -> props
-  val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
+
+  val component
+    : ( [ `Controlled of float option * float option | `Uncontrolled ]
+        * Element.t Map.M(Int).t
+        * props
+      , Element.t )
+      Bonsai.t
 end
 
 module Draggable : sig

@@ -936,8 +936,7 @@ module ScrollView = struct
 
     module Action = struct
       type t =
-        | HorizontalScroll of float
-        | VerticalScroll of float
+        | Scroll of float * float
         | Dimensions of int * int
         | Count of int
         | ChildDimensions of int * int * int
@@ -946,7 +945,12 @@ module ScrollView = struct
     end
 
     module Input = struct
-      type t = Element.t Map.M(Int).t * props
+      type control =
+        [ `Uncontrolled
+        | `Controlled of float option * float option
+        ]
+
+      type t = control * Element.t Map.M(Int).t * props
     end
 
     open Action
@@ -961,15 +965,17 @@ module ScrollView = struct
       dims |> Map.fold ~init:(0, 0) ~f
 
 
-    let compute ~inject ((children, props) : Input.t) (model : Model.t) =
-      let total_width, total_height = calculate_totals (is_columnar props.styles) model.child_dims in
-      let diff_width =
-        Float.(of_int Int.(total_width - model.width) |> clamp_exn ~min:0. ~max:max_value) in
-      let diff_height =
-        Float.(of_int Int.(total_height - model.height) |> clamp_exn ~min:0. ~max:max_value) in
-      let fudge_height = Float.(if diff_height > 0. then of_int model.height * 0.05 else 0.) in
-      let fudge_width = Float.(if diff_width > 0. then of_int model.width * 0.05 else 0.) in
+    let excess total limit = Float.(of_int Int.(total - limit) |> clamp_exn ~min:0. ~max:max_value)
+    let fudge ex limit = Float.(ex + if ex > 0. then of_int limit * 0.05 else 0.)
 
+    let scrollable columnar width height child_dims =
+      let children_width, children_height = calculate_totals columnar child_dims in
+      let w = fudge (excess children_width width) width in
+      let h = fudge (excess children_height height) height in
+      w, h
+
+
+    let compute ~inject ((control, children, props) : Input.t) (model : Model.t) =
       let count = Map.length children in
       if count <> model.child_count
       then
@@ -981,29 +987,40 @@ module ScrollView = struct
           ]
         |> Event.Expert.handle;
 
+      let scroll_width, scroll_height =
+        scrollable (is_columnar props.styles) model.width model.height model.child_dims in
+
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
-        let delta = deltaY *. props.speed in
+        let x_lock, y_lock =
+          match control with
+          | `Controlled (x, y) -> Option.(is_some x, is_some y)
+          | `Uncontrolled -> false, false in
         let event =
+          let delta = deltaY *. props.speed in
           match Float.(abs delta > 0.), shiftKey with
-          | true, false ->
-            let y_pos =
-              model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:(diff_height +. fudge_height)
-            in
-            inject (VerticalScroll y_pos)
-          | true, true ->
+          | true, false when not y_lock ->
+            let y_pos = model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:scroll_height in
+            inject (Scroll (model.x_pos, y_pos))
+          | true, true when not x_lock ->
             let x_pos =
               model.x_pos +. (delta *. horizonal_scroll_multiplier)
-              |> Float.clamp_exn ~min:0. ~max:(diff_width +. fudge_width) in
-            inject (HorizontalScroll x_pos)
-          | false, _ -> Event.no_op in
+              |> Float.clamp_exn ~min:0. ~max:scroll_width in
+            inject (Scroll (x_pos, model.y_pos))
+          | _ -> Event.no_op in
         Event.Many [ event ] in
       let handle_dimension_change ({ width; height } : Node_events.Dimensions_changed.t) =
         Event.Many [ inject (Dimensions (width, height)) ] in
+
+      let trans_x, trans_y =
+        match control with
+        | `Controlled (x_opt, y_opt) ->
+          let x = Option.value_map ~default:model.x_pos ~f:(( *. ) scroll_width) x_opt in
+          let y = Option.value_map ~default:model.y_pos ~f:(( *. ) scroll_height) y_opt in
+          x, y
+        | _ -> model.x_pos, model.y_pos in
       let trans key =
         Attr.
-          [ style
-              Style.
-                [ transform [ TranslateX (-1. *. model.x_pos); TranslateY (-1. *. model.y_pos) ] ]
+          [ style Style.[ transform [ TranslateX (-1. *. trans_x); TranslateY (-1. *. trans_y) ] ]
           ; on_dimensions_changed (fun { width; height } ->
                 Event.Many [ inject (ChildDimensions (key, width, height)) ])
           ] in
@@ -1018,8 +1035,7 @@ module ScrollView = struct
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
-      | HorizontalScroll x_pos -> { model with x_pos }
-      | VerticalScroll y_pos -> { model with y_pos }
+      | Scroll (x_pos, y_pos) -> { model with x_pos; y_pos }
       | Dimensions (width, height) -> { model with width; height }
       | Count n -> { model with child_count = n }
       | ChildDimensions (key, w, h) ->
