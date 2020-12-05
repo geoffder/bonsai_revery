@@ -1206,13 +1206,17 @@ module ScrollView = struct
             :: style props.styles
             :: props.attributes)
           (Map.mapi ~f:(fun ~key ~data -> box (trans key) [ data ]) children |> Map.data) in
-      box
-        Attr.[ style Style.[] ]
-        [ box
-            Attr.[ style Style.([ flex_direction `Row; margin_bottom 2 ] |> List.rev) ]
-            [ view; sliders.y.ele ]
-        ; sliders.x.ele
-        ]
+
+      (* NOTE: Having some trouble deciding how to most cleanly / generally deal with the problem of
+         inheriting the correct style properties and attributes given to ScrollView. For instance,
+         flex_grow. Should the lists be filtered, or should overrides be tacked on like below? *)
+      let inner_box =
+        let styles = Style.(flex_direction `Row :: margin_bottom 2 :: props.styles |> List.rev) in
+        let elements = view :: (if Float.(scroll_height > 0.) then [ sliders.y.ele ] else []) in
+        box Attr.[ style styles ] elements in
+      if Float.(scroll_width > 0.)
+      then box Attr.[ style props.styles ] [ inner_box; sliders.x.ele ]
+      else inner_box
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
@@ -1235,20 +1239,13 @@ module ScrollView = struct
 
   let compose_slider ax =
     let get_props = slider_props ax in
-    let length_style =
-      match ax with
-      | `X -> Style.width
-      | `Y -> Style.height in
     let thumb =
       Bonsai.Arrow.pipe
         ( Bonsai.pure ~f:(fun (children, (props : props)) ->
               let resize_props =
                 Resizable.props
                   ~attributes:(get_props props).thumb.attributes
-                  (* NOTE: Might be a problem for views that begin "overflown" *)
-                  ( length_style (Slider.length_val (get_props props).slider_length)
-                  :: (get_props props).thumb.styles ) in
-              (* (get_props props).thumb.styles in *)
+                  (get_props props).thumb.styles in
               text [] "", resize_props)
         >>> Resizable.component )
         ~via:(fun (_, props) (resize, thumb) -> thumb, (get_props props).thumb)
