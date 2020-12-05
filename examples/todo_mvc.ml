@@ -492,7 +492,7 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
-      and _, _, bonsai = drag_bonsai
+      and _, _, _, bonsai = drag_bonsai
       and slider_box = slider_box
       and footer = footer in
       let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in

@@ -62,7 +62,9 @@ module Draggable : sig
     -> props
 
   val component
-    : (Element.t * props, BoundingBox2d.t * (BoundingBox2d.t -> Event.t) * Element.t) Bonsai.t
+    : ( Element.t * props
+      , BoundingBox2d.t * (BoundingBox2d.t -> Event.t) * (float -> float -> Event.t) * Element.t )
+      Bonsai.t
 end
 
 module Slider : sig

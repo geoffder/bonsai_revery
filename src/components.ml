@@ -770,6 +770,7 @@ module Draggable = struct
         | Grab of float * float
         | Drop
         | Drag of float * float
+        | Shift of freedom * float * float
         | Reset
         | InnerBox of (BoundingBox2d.t[@sexp.opaque])
         | OuterBox of (BoundingBox2d.t[@sexp.opaque])
@@ -783,7 +784,8 @@ module Draggable = struct
     open Action
 
     module Result = struct
-      type t = BoundingBox2d.t * (BoundingBox2d.t -> Event.t) * Element.t
+      type t =
+        BoundingBox2d.t * (BoundingBox2d.t -> Event.t) * (float -> float -> Event.t) * Element.t
     end
 
     let name = "Draggable"
@@ -813,11 +815,9 @@ module Draggable = struct
 
     let compute ~inject ((child, props) : Input.t) (model : Model.t) =
       let handle_mouse_down ({ button; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
-        Event.Many
-          [ ( match button with
-            | BUTTON_LEFT -> inject (Grab (mouseX, mouseY))
-            | _ -> Event.no_op )
-          ] in
+        match button with
+        | BUTTON_LEFT -> inject (Grab (mouseX, mouseY))
+        | _ -> Event.no_op in
       let handle_mouse_up ({ button; _ } : Node_events.Mouse_button.t) =
         Event.Many
           ( match button with
@@ -847,7 +847,8 @@ module Draggable = struct
       let handle_bounding_box_change bb = Event.Many [ inject (InnerBox bb) ] in
       let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
 
-      let set_bounds bb = Event.Many [ inject (OuterBox bb) ] in
+      let shift_callback x y = inject (Shift (props.freedom, x, y)) in
+      let set_bounds bb = inject (OuterBox bb) in
       let element =
         box
           Attr.(
@@ -858,13 +859,25 @@ module Draggable = struct
             :: style (trans :: props.styles)
             :: props.attributes)
           [ child ] in
-      model.inner_box, set_bounds, element
+      model.inner_box, set_bounds, shift_callback, element
 
 
     let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
       | Grab (x, y) -> { model with start = Some (x -. model.x_trans, y -. model.y_trans) }
       | Drop -> { model with start = None }
       | Drag (x, y) -> { model with x_trans = x; y_trans = y }
+      | Shift (freedom, x, y) ->
+        let x0, y0 =
+          match model.start with
+          | Some (x, y) -> x, y
+          | None ->
+            let l, t, r, b = BoundingBox2d.get_bounds model.inner_box in
+            (l +. r) /. 2., (t +. b) /. 2. in
+        let x_pos = y0 +. model.x_trans in
+        let y_pos = y0 +. model.y_trans in
+        let shift_x, shift_y =
+          shift freedom model.inner_box model.outer_box x_pos y_pos (x_pos +. x) (y_pos +. y) in
+        { model with x_trans = shift_x +. model.x_trans; y_trans = shift_y +. model.y_trans }
       | Reset -> { model with x_trans = 0.; y_trans = 0. }
       | InnerBox bb -> { model with inner_box = bb }
       | OuterBox bb -> { model with outer_box = Some bb }
@@ -956,7 +969,12 @@ module Slider = struct
     end
 
     module Input = struct
-      type t = BoundingBox2d.t * (BoundingBox2d.t -> Event.t) * Element.t * props
+      type t =
+        BoundingBox2d.t
+        * (BoundingBox2d.t -> Event.t)
+        * (float -> float -> Event.t)
+        * Element.t
+        * props
     end
 
     open Action
@@ -967,7 +985,7 @@ module Slider = struct
 
     let name = "Slider"
 
-    let compute ~inject ((bar_bb, set_bar_bb, bar, props) : Input.t) (model : Model.t) =
+    let compute ~inject ((bar_bb, set_bar_bb, shift_bar, bar, props) : Input.t) (model : Model.t) =
       let handle_bounding_box_change bb = Event.Many [ inject (SetBoundingBox bb); set_bar_bb bb ] in
       let value =
         Option.value_map model.bounding_box ~default:props.init_value ~f:(fun bb ->
@@ -994,7 +1012,7 @@ module Slider = struct
     let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
     Bonsai.Arrow.pipe
       (Bonsai.pure ~f:(fun (props : props) -> text [] "", props.thumb) >>> Draggable.component)
-      ~via:(fun props (bb, set_bounds, draggable) -> bb, set_bounds, draggable, props)
+      ~via:(fun props (bb, set_bounds, shift, draggable) -> bb, set_bounds, shift, draggable, props)
       ~into:component
       ~finalize:(fun _ _ (value, slider) -> value, slider)
 
@@ -1092,15 +1110,13 @@ module ScrollView = struct
     end
 
     module Input = struct
-      type control =
-        [ `Uncontrolled
-        | `Controlled of float option * float option
-        ]
+      type control = float * float
 
       type slider =
         { ele : Element.t
         ; resize :
             [ `Scale of float option * float option | `Set of int option * int option ] -> Event.t
+        ; shift : float -> float -> Event.t
         }
 
       type sliders =
@@ -1138,6 +1154,10 @@ module ScrollView = struct
         scrollable (is_columnar props.styles) model.outer_width model.outer_height model.child_dims
       in
       let () =
+        (* NOTE: I'm wary of using Expert.handle, and I could conceivably have these fired along
+           with when child dimensions change, but then the bundled events would go off once for
+           every child (since they all fire dimensions changed events any time one is added or
+           removed). *)
         let count = Map.length children in
         if count <> model.child_count
         then
@@ -1160,38 +1180,17 @@ module ScrollView = struct
             ]
           |> Event.Expert.handle ) in
 
-      (* TODO: Send wheel input along to the sliders. Need to calculate the correct amount to alter
-         them as well. Change the value and use the on_value_changed callback, then have them change
-         their thumb position accordingly? Either way the input here has to cascade all the way down
-         to the draggable thumb. *)
       let handle_wheel ({ shiftKey; deltaY; _ } : Node_events.Mouse_wheel.t) =
-        let x_lock, y_lock =
-          match control with
-          | `Controlled (x, y) -> Option.(is_some x, is_some y)
-          | `Uncontrolled -> false, false in
-        let event =
-          let delta = deltaY *. props.speed in
-          match Float.(abs delta > 0.), shiftKey with
-          | true, false when not y_lock ->
-            let y_pos = model.y_pos +. delta |> Float.clamp_exn ~min:0. ~max:scroll_height in
-            inject (Scroll (model.x_pos, y_pos))
-          | true, true when not x_lock ->
-            let x_pos =
-              model.x_pos +. (delta *. horizonal_scroll_multiplier)
-              |> Float.clamp_exn ~min:0. ~max:scroll_width in
-            inject (Scroll (x_pos, model.y_pos))
-          | _ -> Event.no_op in
-        Event.Many [ event ] in
+        let delta = deltaY *. props.speed in
+        match Float.(abs delta > 0.), shiftKey with
+        | true, false -> sliders.y.shift 0. delta
+        | true, true -> sliders.x.shift (delta *. horizonal_scroll_multiplier) 0.
+        | _ -> Event.no_op in
       let outer_dimension_change ({ width; height } : Node_events.Dimensions_changed.t) =
         inject (OuterDimensions (width, height)) in
 
-      let trans_x, trans_y =
-        match control with
-        | `Controlled (x_opt, y_opt) ->
-          let x = Option.value_map ~default:model.x_pos ~f:(( *. ) scroll_width) x_opt in
-          let y = Option.value_map ~default:model.y_pos ~f:(( *. ) scroll_height) y_opt in
-          x, y
-        | _ -> model.x_pos, model.y_pos in
+      let trans_x = fst control *. scroll_width in
+      let trans_y = snd control *. scroll_height in
       let trans key =
         Attr.
           [ style Style.[ transform [ TranslateX (-1. *. trans_x); TranslateY (-1. *. trans_y) ] ]
@@ -1210,7 +1209,7 @@ module ScrollView = struct
       box
         Attr.[ style Style.[] ]
         [ box
-            Attr.[ style Style.([ flex_direction `Row; margin_bottom 5 ] |> List.rev) ]
+            Attr.[ style Style.([ flex_direction `Row; margin_bottom 2 ] |> List.rev) ]
             [ view; sliders.y.ele ]
         ; sliders.x.ele
         ]
@@ -1221,6 +1220,7 @@ module ScrollView = struct
       | OuterDimensions (w, h) -> { model with outer_width = w; outer_height = h }
       | Count n -> { model with child_count = n }
       | ChildDimensions (key, w, h) ->
+        Log.perf "child dims" (fun () -> ());
         { model with child_dims = Map.set model.child_dims ~key ~data:(w, h) }
       | TrimChildren keys ->
         { model with child_dims = Map.filter_keys model.child_dims ~f:(Set.mem keys) }
@@ -1253,15 +1253,15 @@ module ScrollView = struct
         >>> Resizable.component )
         ~via:(fun (_, props) (resize, thumb) -> thumb, (get_props props).thumb)
         ~into:Draggable.component
-        ~finalize:(fun props (resize, thumb) (bb, set_bounds, draggable) ->
-          bb, set_bounds, resize, draggable) in
+        ~finalize:(fun props (resize, thumb) (bb, set_bounds, shift, draggable) ->
+          bb, set_bounds, shift, resize, draggable) in
     Bonsai.Arrow.pipe
       thumb
-      ~via:(fun (children, props) (bb, set_bounds, resize, draggable) ->
-        bb, set_bounds, draggable, get_props props)
+      ~via:(fun (children, props) (bb, set_bounds, shift, resize, draggable) ->
+        bb, set_bounds, shift, draggable, get_props props)
       ~into:Slider.with_thumb
-      ~finalize:(fun (children, props) (bb, set_bounds, resize, draggable) (value, slider) ->
-        value, resize, slider)
+      ~finalize:(fun (children, props) (bb, set_bounds, shift, resize, draggable) (value, slider) ->
+        value, shift, resize, slider)
 
 
   let with_sliders =
@@ -1269,13 +1269,14 @@ module ScrollView = struct
     Bonsai.Arrow.fanout (compose_slider `X) (compose_slider `Y)
     |> Bonsai.Arrow.pipe
          ~via:
-           (fun (children, props) ((x_value, x_resize, x_slider), (y_value, y_resize, y_slider)) ->
+           (fun (children, props)
+                ((x_value, x_shift, x_resize, x_slider), (y_value, y_shift, y_resize, y_slider)) ->
            let sliders =
              T.Input.
-               { x = { ele = x_slider; resize = x_resize }
-               ; y = { ele = y_slider; resize = y_resize }
+               { x = { ele = x_slider; shift = x_shift; resize = x_resize }
+               ; y = { ele = y_slider; shift = y_shift; resize = y_resize }
                } in
-           `Controlled (Some x_value, Some y_value), sliders, children, props)
+           (x_value, y_value), sliders, children, props)
          ~into:component
          ~finalize:(fun _ _ result -> result)
 end
