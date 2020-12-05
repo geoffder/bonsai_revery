@@ -1140,13 +1140,10 @@ module ScrollView = struct
 
 
     let excess total limit = Float.(of_int Int.(total - limit) |> clamp_exn ~min:0. ~max:max_value)
-    let fudge ex limit = Float.(ex + if ex > 0. then of_int limit * 0.05 else 0.)
 
     let scrollable columnar width height child_dims =
       let children_width, children_height = calculate_totals columnar child_dims in
-      let w = fudge (excess children_width width) width in
-      let h = fudge (excess children_height height) height in
-      w, h
+      excess children_width width, excess children_height height
 
 
     let compute ~inject ((control, sliders, children, props) : Input.t) (model : Model.t) =
