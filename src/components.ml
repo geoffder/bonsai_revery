@@ -1262,18 +1262,18 @@ module ScrollView = struct
 
 
   let with_sliders =
-    let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
     Bonsai.Arrow.fanout (compose_slider `X) (compose_slider `Y)
-    |> Bonsai.Arrow.pipe
-         ~via:
-           (fun (children, props)
-                ((x_value, x_shift, x_resize, x_slider), (y_value, y_shift, y_resize, y_slider)) ->
+    |> Bonsai.Arrow.extend_first
+    |> Bonsai.map
+         ~f:(fun
+              ( ((x_value, x_shift, x_resize, x_slider), (y_value, y_shift, y_resize, y_slider))
+              , (children, props) )
+            ->
            let sliders =
              T.Input.
                { x = { ele = x_slider; shift = x_shift; resize = x_resize }
                ; y = { ele = y_slider; shift = y_shift; resize = y_resize }
                } in
            (x_value, y_value), sliders, children, props)
-         ~into:component
-         ~finalize:(fun _ _ result -> result)
+    >>> Bonsai.of_module (module T) ~default_model:T.Model.default
 end
