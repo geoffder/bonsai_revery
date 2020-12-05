@@ -67,7 +67,7 @@ let clickable_box' =
                | Revery.MouseButton.BUTTON_RIGHT -> [ attributes.custom_events.on_right_click ]
                | _ -> [] ) in
 
-             Event.Many (List.filter_map events ~f:Fn.id) )
+             Event.Many (List.filter_opt events) )
            else Event.no_op in
 
          let user_on_mouse_leave = attributes.native_events.onMouseLeave in
@@ -663,9 +663,9 @@ module Resizable = struct
     let name = "Resizable"
 
     let compute ~inject ((child, props) : Input.t) (model : Model.t) =
-      let resize r = Event.Many [ inject (Resize r) ] in
+      let resize r = inject (Resize r) in
       let handle_dimensions_changed ({ width; height } : Node_events.Dimensions_changed.t) =
-        Event.Many [ inject (OriginalDimensions (width, height)) ] in
+        inject (OriginalDimensions (width, height)) in
       let changed =
         List.filter_opt
           Style.[ Option.map ~f:width model.set_width; Option.map ~f:height model.set_height ] in
@@ -844,7 +844,7 @@ module Draggable = struct
             let y = y_shift +. model.y_trans in
             [ inject (Drag (x, y)); props.on_drag ~x ~y ]
           | None -> [ Event.no_op ] ) in
-      let handle_bounding_box_change bb = Event.Many [ inject (InnerBox bb) ] in
+      let handle_bounding_box_change bb = inject (InnerBox bb) in
       let trans = Style.(transform [ TranslateX model.x_trans; TranslateY model.y_trans ]) in
 
       let shift_callback x y = inject (Shift (props.freedom, x, y)) in
@@ -1195,7 +1195,7 @@ module ScrollView = struct
         Attr.
           [ style Style.[ transform [ TranslateX (-1. *. trans_x); TranslateY (-1. *. trans_y) ] ]
           ; on_dimensions_changed (fun { width; height } ->
-                Event.Many [ inject (ChildDimensions (key, width, height)) ])
+                inject (ChildDimensions (key, width, height)))
           ] in
 
       let view =
