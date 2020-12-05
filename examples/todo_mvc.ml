@@ -490,7 +490,6 @@ let state_component =
 
 let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
   state_component
-  (* >>> let%map.Bonsai scroller, scroll_view_list = scroll_view_list *)
   >>> let%map.Bonsai scroll_view_list = scroll_view_list
       and add_todo = add_todo
       and _, _, bonsai = drag_bonsai
@@ -498,11 +497,4 @@ let app : (unit, Element.t) Bonsai_revery.Bonsai.t =
       and footer = footer in
       let title = text Attr.[ style Styles.title; kind Styles.title_font ] "todoMVC" in
       let header = box Attr.[ style Styles.header ] [ bonsai; title; slider_box ] in
-      (* let footer =
-       *   box
-       *     Attr.
-       *       [ style Style.[ align_items `Center; flex_direction `Row; justify_content `FlexStart ] ]
-       *     [ box Attr.[ style Style.[ margin_right 10 ] ] [ scroller ]
-       *     ; box Attr.[ style Style.[ flex_direction `Row; flex_shrink 1 ] ] [ footer ]
-       *     ] in *)
       box Attr.[ style Styles.app_container ] [ header; add_todo; scroll_view_list; footer ]
