@@ -1009,12 +1009,12 @@ module Slider = struct
   end
 
   let component =
-    let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
-    Bonsai.Arrow.pipe
-      (Bonsai.pure ~f:(fun (props : props) -> text [] "", props.thumb) >>> Draggable.component)
-      ~via:(fun props (bb, set_bounds, shift, draggable) -> bb, set_bounds, shift, draggable, props)
-      ~into:component
-      ~finalize:(fun _ _ (value, slider) -> value, slider)
+    Bonsai.pure ~f:(fun (props : props) -> text [] "", props.thumb)
+    >>> Draggable.component
+    |> Bonsai.Arrow.extend_first
+    |> Bonsai.map ~f:(fun ((bb, set_bounds, shift, draggable), props) ->
+           bb, set_bounds, shift, draggable, props)
+    >>> Bonsai.of_module (module T) ~default_model:T.Model.default
 
 
   let with_thumb = Bonsai.of_module (module T) ~default_model:T.Model.default
