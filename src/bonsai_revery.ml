@@ -105,42 +105,47 @@ module Components : sig
   end
 
   module Draggable : sig
-    type bounds =
-      { x_min : float option
-      ; y_min : float option
-      ; x_max : float option
-      ; y_max : float option
-      }
+    type freedom =
+      | X
+      | Y
+      | Free
 
     type props =
       { styles : Style.t list
       ; attributes : Attr.t list
+      ; freedom : freedom
       ; snap_back : bool
-      ; bounds : bounds
       ; on_drag : x:float -> y:float -> Event.t
       ; on_drop : Import.BoundingBox2d.t -> Event.t
       }
 
     val props
       :  ?attributes:Attributes.t list
+      -> ?freedom:freedom
       -> ?snap_back:bool
-      -> ?bounds:bounds
       -> ?on_drag:(x:float -> y:float -> Event.t)
       -> ?on_drop:(Import.BoundingBox2d.t -> Event.t)
       -> Style.t list
       -> props
 
-    val component : (Element.t * props, Import.BoundingBox2d.t * Element.t) Bonsai.t
+    val component
+      : ( Element.t * props
+        , Import.BoundingBox2d.t * (Import.BoundingBox2d.t -> Event.t) * Element.t )
+        Bonsai.t
   end
 
   module Slider : sig
+    type length =
+      | Dynamic of int
+      | Static of int
+
     type props =
       { on_value_changed : float -> Event.t
       ; vertical : bool
       ; min_value : float
       ; max_value : float
       ; init_value : float
-      ; slider_length : int
+      ; slider_length : length
       ; track_thickness : int
       ; track_color : Color.t
       ; thumb : Draggable.props
@@ -152,8 +157,8 @@ module Components : sig
       -> ?min_value:float
       -> ?max_value:float
       -> ?init_value:float
-      -> ?slider_length:int
-      -> ?thumb_length:int
+      -> ?slider_length:length
+      -> ?thumb_length:length
       -> ?thumb_thickness:int
       -> ?track_thickness:int
       -> ?track_color:Color.t
@@ -176,18 +181,6 @@ module Components : sig
     val props : ?speed:float -> ?attributes:Attr.t list -> Style.t list -> props
 
     open Core_kernel
-
-    module T : sig
-      module Input : sig
-        type slider =
-          { ele : Element.t
-          ; resize :
-              [ `Scale of float option * float option | `Set of int option * int option ] -> Event.t
-          }
-
-        type sliders = { y : slider }
-      end
-    end
 
     val props
       :  ?speed:float
