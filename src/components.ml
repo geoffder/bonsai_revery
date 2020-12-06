@@ -612,6 +612,12 @@ module Text_input = struct
 end
 
 module Resizable = struct
+  type resize =
+    [ `Scale of float option * float option
+    | `Set of int option * int option
+    ]
+  [@@deriving sexp_of]
+
   type props =
     { styles : (Style.t[@sexp.opaque]) list
     ; attributes : Attr.t list
@@ -638,12 +644,6 @@ module Resizable = struct
     end
 
     module Action = struct
-      type resize =
-        [ `Scale of float option * float option
-        | `Set of int option * int option
-        ]
-      [@@deriving sexp_of]
-
       type t =
         | Resize of resize
         | OriginalDimensions of (int * int)
@@ -1113,9 +1113,8 @@ module ScrollView = struct
       type control = float * float
 
       type slider =
-        { ele : Element.t
-        ; resize :
-            [ `Scale of float option * float option | `Set of int option * int option ] -> Event.t
+        { element : Element.t
+        ; resize : Resizable.resize -> Event.t
         ; shift : float -> float -> Event.t
         }
 
@@ -1209,10 +1208,10 @@ module ScrollView = struct
          flex_grow. Should the lists be filtered, or should overrides be tacked on like below? *)
       let inner_box =
         let styles = Style.(flex_direction `Row :: margin_bottom 2 :: props.styles |> List.rev) in
-        let elements = view :: (if Float.(scroll_height > 0.) then [ sliders.y.ele ] else []) in
+        let elements = view :: (if Float.(scroll_height > 0.) then [ sliders.y.element ] else []) in
         box Attr.[ style styles ] elements in
       if Float.(scroll_width > 0.)
-      then box Attr.[ style props.styles ] [ inner_box; sliders.x.ele ]
+      then box Attr.[ style props.styles ] [ inner_box; sliders.x.element ]
       else inner_box
 
 
@@ -1258,7 +1257,7 @@ module ScrollView = struct
         value, shift, resize, slider)
 
 
-  let with_sliders =
+  let component =
     Bonsai.Arrow.fanout (compose_slider `X) (compose_slider `Y)
     |> Bonsai.Arrow.extend_first
     |> Bonsai.map
@@ -1268,8 +1267,8 @@ module ScrollView = struct
             ->
            let sliders =
              T.Input.
-               { x = { ele = x_slider; shift = x_shift; resize = x_resize }
-               ; y = { ele = y_slider; shift = y_shift; resize = y_resize }
+               { x = { element = x_slider; shift = x_shift; resize = x_resize }
+               ; y = { element = y_slider; shift = y_shift; resize = y_resize }
                } in
            (x_value, y_value), sliders, children, props)
     >>> Bonsai.of_module (module T) ~default_model:T.Model.default

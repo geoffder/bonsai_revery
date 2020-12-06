@@ -37,6 +37,29 @@ module Text_input : sig
   val component : (props, string * (string -> Event.t) * Element.t) Bonsai.t
 end
 
+module Resizable : sig
+  type resize =
+    [ `Scale of float option * float option
+    | `Set of int option * int option
+    ]
+
+  type props =
+    { styles : Style.t list
+    ; attributes : Attributes.t list
+    ; max_width : int option
+    ; max_height : int option
+    }
+
+  val props
+    :  ?attributes:Attributes.t list
+    -> ?max_width:int
+    -> ?max_height:int
+    -> Style.t list
+    -> props
+
+  val component : (Element.t * props, (resize -> Event.t) * Element.t) Bonsai.t
+end
+
 module Draggable : sig
   type freedom =
     | X
@@ -121,7 +144,7 @@ module ScrollView : sig
     -> Style.t list
     -> props
 
-  val with_sliders : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
+  val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
 end
 
 module Expert : sig
