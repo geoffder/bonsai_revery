@@ -376,21 +376,6 @@ module Components = struct
   end
 end
 
-let todo_list =
-  Tuple2.map_fst ~f:(fun model ->
-      Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
-  @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component
-
-
-let scroll_view_list =
-  let props =
-    ScrollView.props
-      ~track_color:Theme.dimmed_text_color
-      ~thumb_color:(Color.hex "#9D77D1")
-      Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] in
-  Bonsai.map todo_list ~f:(fun children -> children, props) >>> ScrollView.component
-
-
 let drag_bonsai =
   let img =
     box
@@ -405,6 +390,38 @@ let drag_bonsai =
           "( drag me! )"
       ] in
   Bonsai.pure ~f:(fun (_model, inject) -> img, Draggable.props []) >>> Draggable.component
+
+
+let slider_box =
+  let%map.Bonsai value, slider =
+    Bonsai.pure ~f:(fun (_model, _inject) ->
+        Slider.props
+          ~track_color:Theme.dimmed_text_color
+          ~thumb_color:(Color.hex "#9D77D1")
+          ~max_value:100.
+          ~vertical:false
+          ())
+    >>> Slider.component in
+  let display =
+    text
+      Attr.[ style Style.[ color Theme.title_text_color; margin_top 5 ]; kind Theme.font_info ]
+      Int.(of_float value |> to_string) in
+  box Attr.[ style Style.[ align_items `Center ] ] [ slider; display ]
+
+
+let todo_list =
+  Tuple2.map_fst ~f:(fun model ->
+      Map.filter model.Model.todos ~f:(Todo.is_visible ~filter:model.filter))
+  @>> Bonsai.Map.associ_input_with_extra (module Int) Components.Todo.component
+
+
+let scroll_view_list =
+  let props =
+    ScrollView.props
+      ~track_color:Theme.dimmed_text_color
+      ~thumb_color:(Color.hex "#9D77D1")
+      Style.[ flex_grow 10000; overflow `Hidden; max_height 700 ] in
+  Bonsai.map todo_list ~f:(fun children -> children, props) >>> ScrollView.component
 
 
 let text_input =
@@ -427,27 +444,6 @@ let add_todo =
   let all_completed = Map.for_all model.Model.todos ~f:Todo.completed in
 
   Components.Add_todo.view ~all_completed ~on_toggle_all:(inject Action.Toggle_all) [ text_input ]
-
-
-let slider =
-  let props =
-    Slider.props
-      ~track_color:Theme.dimmed_text_color
-      ~thumb_color:(Color.hex "#9D77D1")
-      ~max_value:100.
-      ~vertical:false
-      () in
-  Bonsai.pure ~f:(fun (_, _) -> props) >>> Slider.component
-
-
-let slider_box =
-  let%map.Bonsai model, inject = Bonsai.pure ~f:Fn.id
-  and value, slider = slider in
-  let display =
-    text
-      Attr.[ style Style.[ color Theme.title_text_color; margin_top 5 ]; kind Theme.font_info ]
-      Int.(of_float value |> to_string) in
-  box Attr.[ style Style.[ align_items `Center ] ] [ slider; display ]
 
 
 let footer =
