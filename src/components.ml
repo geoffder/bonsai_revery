@@ -266,6 +266,8 @@ let tick =
              ~name:"tick stabilize"
              (fun _ ->
                Incr.Clock.advance_clock Incr.clock ~to_:(Time_ns.now ());
+               Lwt.wakeup_paused ();
+               Lwt_engine.iter false;
                Timber.Log.perf "tick stabilize" Incr.stabilize)
              (Revery.Time.ofFloatSeconds (Time.Span.to_sec interval)) in
 
