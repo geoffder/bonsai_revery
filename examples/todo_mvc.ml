@@ -454,13 +454,18 @@ let state_component =
     (module Action)
     [%here]
     ~default_model:Model.default
-    ~apply_action:(fun ~inject:_ ~schedule_event:_ () model -> function
+    ~apply_action:(fun ~inject ~schedule_event () model -> function
       | Add title ->
         let key =
           match Map.max_elt model.todos with
           | Some (key, _) -> key + 1
           | None -> 0 in
         let todos = Map.add_exn model.todos ~key ~data:{ title; completed = false } in
+        (* if not (String.equal "foo" title)
+         * then
+         *   Lwt_unix.sleep 3.
+         *   |> Lwt.map (fun () -> inject (Add "foo") |> Event.Expert.handle)
+         *   |> Lwt.ignore_result; *)
         { model with todos }
       | Toggle key ->
         let todos = Map.change model.todos key ~f:(Option.map ~f:Todo.toggle) in
