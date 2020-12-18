@@ -421,7 +421,7 @@ let scroll_view_list =
 
 let text_input =
   Bonsai.pure ~f:(fun (_model, inject) ->
-      Text_input.props
+      Text_area.props
         ~placeholder:"Add your Todo here!"
         ~autofocus:true
         ~on_key_down:(fun event value set_value ->
@@ -430,7 +430,7 @@ let text_input =
             Event.Many [ inject (Action.Add value); set_value "" ]
           | _ -> Event.no_op)
         Attr.[ kind Theme.font_info ])
-  >>> Text_input.component
+  >>> Text_area.component
 
 
 let add_todo =
