@@ -210,6 +210,7 @@ module Components = struct
           [ margin 6
           ; color (if is_checked then Theme.dimmed_text_color else Theme.text_color)
           ; flex_grow 1
+          ; text_wrap WrapIgnoreWhitespace
           ]
 
 
@@ -229,8 +230,6 @@ module Components = struct
           ~f:(fun a -> { a with family = Revery.Font.Family.fromFile "FontAwesome5FreeSolid.otf" })
           Theme.font_info
     end
-
-    let view ~task:_ = box Attr.[ style Styles.box ] []
 
     let component =
       Bonsai.pure ~f:(fun ((key : int), (todo : Todo.t), (inject : Action.t -> Event.t)) ->
@@ -426,7 +425,7 @@ let text_input =
         ~autofocus:true
         ~on_key_down:(fun event value set_value ->
           match event.key with
-          | Return when not (String.is_empty value) ->
+          | Return when (not (String.is_empty value)) && not event.shift ->
             Event.Many [ inject (Action.Add value); set_value "" ]
           | _ -> Event.no_op)
         Attr.[ kind Theme.font_info ])

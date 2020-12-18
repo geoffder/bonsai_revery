@@ -1493,6 +1493,11 @@ module Text_area = struct
             let value, cursor_position = removeCharacterBefore value cursor_position in
             inject (Action.Text_input (value, cursor_position))
           | V when keyboard_event.ctrl -> paste value cursor_position
+          | Return when keyboard_event.shift ->
+            (* TODO: Change how update works since cursor position behaviour is
+             * going to be different. *)
+            let value, cursor_position = insertString value "\n" cursor_position in
+            update value cursor_position
           | Escape ->
             UI.Focus.loseFocus ();
             Event.no_op
@@ -1570,13 +1575,17 @@ module Text_area = struct
                      Attr.
                        [ node_ref (fun node -> inject (Action.Set_text_node node))
                        ; style
-                           Style.(
-                             Styles.text
-                               ~showPlaceholder:show_placeholder
-                               ~scrollOffset:scroll_offset
-                               ~placeholderColor:input.placeholder_color
-                               ~color:attributes.style.color
-                             @ [ text_wrap WrapIgnoreWhitespace; flex_direction `Column ])
+                           Style.
+                             [ color
+                                 ( if show_placeholder
+                                 then input.placeholder_color
+                                 else attributes.style.color )
+                             ; align_items `Center
+                             ; justify_content `FlexStart
+                             ; text_wrap WrapIgnoreWhitespace
+                             ; flex_direction `Column
+                             ; transform [ TranslateX (-.Float.of_int !scroll_offset) ]
+                             ]
                        ; kind attributes.kind
                        ]
                      (if show_placeholder then input.placeholder else value)
