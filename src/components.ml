@@ -1499,34 +1499,51 @@ module Text_area = struct
       x_offset, Float.(of_int y_count * line_height)
 
 
-    (* FIXME: Need to solve not showing one line of over flow. The true height
-     * of the text block is the offset, plus the height of a line.
-     * Also, there is a bug, not sure if scroll related, where no text appears
-     * until a new line is made, after either adding a todo or backspacing to no value. *)
-    let scroll container_height line_height y_offset scroll_offset =
+    (* FIXME: There is some glitchyness as scrolling occurs when the container
+     * is growing. Not sure where the origin is, obv probably not here, but need
+     * to investigate. *)
+    let scroll container_height text_height line_height y_offset scroll_offset =
       let open Float in
-      let y_offset = if y_offset >. 0. then y_offset + line_height else y_offset in
-      if y_offset < scroll_offset
-      then y_offset
-      else if y_offset - scroll_offset > container_height
-      then y_offset - container_height
-      else scroll_offset
+      if text_height > container_height
+      then (
+        let offset =
+          if y_offset < scroll_offset
+          then y_offset
+          else if y_offset + line_height - scroll_offset > container_height
+          then y_offset + line_height - container_height
+          else scroll_offset in
+        (* Make sure all the space is used to show text (no overscroll). *)
+        Float.clamp_exn ~min:0. ~max:(text_height -. container_height) offset )
+      else 0.
 
 
-    (* TODO: After other stuff is working, convert this to deal with X and Y. *)
-    let index_nearest_offset ~measure text offset =
+    (* FIXME: Cursor still displays after last char of previous line when clicking
+     * before the first of a line. This is cursor vs newline related though I believe,
+     * as seen in the issue with RETURN not moving cursor down until new entries. *)
+    let index_nearest_offset ~measure x_offset y_offset text =
       let length = String.length text in
-      let rec loop ~last i =
+      (* necessary? harmful? *)
+      let x_offset = Float.max 0. x_offset in
+      let rec find_row_start ~last_y ~last_start i =
         if i > length
-        then i - 1
+        then last_start
         else (
-          let width = measure (String.sub text 0 i) in
-          if width > offset
-          then (
-            let isCurrentNearest = width - offset < offset - last in
-            if isCurrentNearest then i else i - 1 )
-          else loop ~last:width (i + 1) ) in
-      loop ~last:0 1
+          let _, height = measure (String.sub text 0 i) in
+          if Float.(height > y_offset)
+          then if Float.(height - y_offset < y_offset - last_y) then i else last_start
+          else (
+            let last_y, last_start =
+              if Float.(height > last_y) then height, i else last_y, last_start in
+            find_row_start ~last_y ~last_start (i + 1) ) ) in
+      let rec loop ~last_x i =
+        if i > length
+        then length
+        else (
+          let width, _ = measure (String.sub text 0 i) in
+          if Float.(width > x_offset)
+          then if Float.(width - x_offset < x_offset - last_x) then i else i - 1
+          else loop ~last_x:width (i + 1) ) in
+      loop ~last_x:0. (find_row_start ~last_y:0. ~last_start:0 1)
 
 
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
@@ -1543,7 +1560,7 @@ module Text_area = struct
       (* let cursor_position = min model.cursor_position (String.length value) in *)
       let cursor_position = model.cursor_position in
 
-      (* let measure_text_width text = measure_text_width' font_info text in *)
+      let measure_text_width text = measure_text_width font_info text in
       let update value cursor_position = inject (Action.Text_input (value, cursor_position)) in
 
       let paste value cursor_position =
@@ -1560,7 +1577,7 @@ module Text_area = struct
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
         let event =
           (* TODO: Up and Down navigation. Requires reimplementation of nearest
-           * index, or similar. *)
+           * index, or similar. Intermediary function that feeds into nearest index? *)
           match keyboard_event.key with
           | Left ->
             let cursor_position = getSafeStringBounds value cursor_position (-1) in
@@ -1584,21 +1601,28 @@ module Text_area = struct
           | _ -> Event.no_op in
         Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
-      (* TODO: Re-implement after everything else is working. *)
+      (* TODO: A lot of this is shared with lines in UpdateOffsets. Could be that
+       * some could be factored into a function. Especially considering handling
+       * up and down key nav is probably going to need some of the same as well. *)
       let handle_click (event : Node_events.Mouse_button.t) =
-        match model.text_node with
-        | Some node ->
-          (* let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in *)
-          (* let text_offset = int_of_float event.mouseX - scene_offsets.left + model.scroll_offset in
-           * let cursor_position = index_nearest_offset ~measure:measure_text_width value text_offset in *)
-          let cursor_position = 0 in
+        match model.text_node, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
+        | Some node, Some parent ->
+          let container : UI.Dimensions.t = parent#measurements () in
+          let style : UI.Style.t = node#getStyle () in
+          let line_height = measure_text_height font_info *. style.lineHeight in
+          let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
+          let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
+          let x_text_offset = event.mouseX -. Float.of_int scene_offsets.left in
+          let y_text_offset =
+            event.mouseY -. Float.of_int scene_offsets.top +. model.scroll_offset in
+          let cursor_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
           Option.iter model.input_node ~f:UI.Focus.focus;
           update value cursor_position
-        | None -> Event.no_op in
+        | _ -> Event.no_op in
 
       let cursor =
         let y_offset = model.y_offset -. model.scroll_offset in
-        let cursor_style =
+        let position_style =
           Style.
             [ position `Absolute
             ; margin_top 2
@@ -1606,7 +1630,7 @@ module Text_area = struct
             ] in
         tick ~every:(if model.focused then Time.Span.of_ms 16.0 else Time.Span.of_hr 1.0)
         @@ box
-             Attr.[ style cursor_style ]
+             Attr.[ style position_style ]
              [ opacity
                  ~opacity:(if model.focused && cursor_on then 1.0 else 0.0)
                  [ box
@@ -1646,7 +1670,11 @@ module Text_area = struct
           (box
              Attr.[ style Styles.marginContainer ]
              [ box
-                 Attr.[ style Style.[ flex_grow 1 ] ]
+                 Attr.
+                   [ style
+                       Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
+                   ; on_dimensions_changed (fun d -> inject Action.UpdateOffsets)
+                   ]
                  [ text
                      Attr.
                        [ node_ref (fun node -> inject (Action.Set_text_node node))
@@ -1711,8 +1739,15 @@ module Text_area = struct
               line_height
               (Float.of_int container.width)
               (String.sub ~pos:0 ~len:cursor_position value) in
+          let _, max_y_offset =
+            measure_text_dims font_info line_height (Float.of_int container.width) value in
           let scroll_offset =
-            scroll (Float.of_int container.height) line_height y_offset model.scroll_offset in
+            scroll
+              (Float.of_int container.height)
+              (max_y_offset +. line_height)
+              line_height
+              y_offset
+              model.scroll_offset in
           { model with x_offset; y_offset; scroll_offset }
         | None -> model )
       | Set_text_node node -> { model with text_node = Some node }
