@@ -437,14 +437,14 @@ module Text_input = struct
 
     let default_kind = Attr.KindSpec.(TextNode { Text.default with size = 18. })
 
-    let compute ~inject ((cursor_on, input) : Input.t) (model : Model.t) =
+    let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
-      let attributes = Attr.make ~default_style ~default_kind input.attributes in
+      let attributes = Attr.make ~default_style ~default_kind props.attributes in
       let font_info =
         match attributes.kind with
         | TextNode spec -> spec
         | _ -> Attr.KindSpec.Text.default in
-      let value = Option.first_some model.value input.default_value |> Option.value ~default:"" in
+      let value = Option.first_some model.value props.default_value |> Option.value ~default:"" in
       let set_value value = inject (Action.Set_value value) in
       let show_placeholder = String.equal value "" in
       let scroll_offset = model.scroll_offset in
@@ -505,7 +505,7 @@ module Text_input = struct
             UI.Focus.loseFocus ();
             Event.no_op
           | _ -> Event.no_op in
-        Event.Many [ event; input.on_key_down keyboard_event value set_value ] in
+        Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
       let handle_click (event : Node_events.Mouse_button.t) =
         match model.text_node with
@@ -535,7 +535,7 @@ module Text_input = struct
                            Style.
                              [ width Constants.cursorWidth
                              ; height (Float.to_int font_info.size)
-                             ; background_color input.cursor_color
+                             ; background_color props.cursor_color
                              ]
                        ]
                      []
@@ -545,14 +545,14 @@ module Text_input = struct
       let attributes =
         Attr.(
           node_ref (fun node ->
-              if input.autofocus then UI.Focus.focus node;
+              if props.autofocus then UI.Focus.focus node;
               inject (Action.Set_input_node node))
           :: on_mouse_down handle_click
           :: on_key_down handle_key_down
           :: on_text_input handle_text_input
           :: on_focus (inject Action.Focus)
           :: on_blur (inject Action.Blur)
-          :: input.attributes)
+          :: props.attributes)
         |> Attr.make ~default_style ~default_kind in
 
       attributes.style
@@ -574,11 +574,11 @@ module Text_input = struct
                            (Styles.text
                               ~showPlaceholder:show_placeholder
                               ~scrollOffset:scroll_offset
-                              ~placeholderColor:input.placeholder_color
+                              ~placeholderColor:props.placeholder_color
                               ~color:attributes.style.color)
                        ; kind attributes.kind
                        ]
-                     (if show_placeholder then input.placeholder else value)
+                     (if show_placeholder then props.placeholder else value)
                  ]
              ; cursor
              ]) in
@@ -1396,12 +1396,25 @@ module Text_area = struct
       type t =
         { focused : bool
         ; value : string option
-        ; cursor_position : int
         ; text_node : (UI.node[@sexp.opaque] [@equal.ignore]) option
         ; input_node : (UI.node[@sexp.opaque] [@equal.ignore]) option
-        ; scroll_offset : int ref (* TODO: needs to be vertical *)
+        ; cursor_position : int
+        ; x_offset : float
+        ; y_offset : float
+        ; scroll_offset : float
         }
       [@@deriving equal, sexp]
+
+      let default =
+        { focused = false
+        ; value = None
+        ; text_node = None
+        ; input_node = None
+        ; cursor_position = 0
+        ; x_offset = 0.
+        ; y_offset = 0.
+        ; scroll_offset = 0.
+        }
     end
 
     module Action = struct
@@ -1410,6 +1423,7 @@ module Text_area = struct
         | Blur
         | Text_input of string * int
         | Set_value of string
+        | UpdateOffsets
         | Set_text_node of (UI.node[@sexp.opaque])
         | Set_input_node of (UI.node[@sexp.opaque])
       [@@deriving sexp_of]
@@ -1429,41 +1443,107 @@ module Text_area = struct
       ; flexDirection = Revery.UI.LayoutTypes.Row
       ; alignItems = AlignFlexStart
       ; justifyContent = JustifyFlexStart
-      ; height = 200
+      ; maxHeight = 150 (* NOTE: for testing *)
       }
 
 
-    let default_kind = Attr.KindSpec.(TextNode { Text.default with size = 18. })
+    let default_text_spec = { Attr.KindSpec.Text.default with size = 18. }
+    let default_kind = Attr.KindSpec.(TextNode default_text_spec)
 
-    let compute ~inject ((cursor_on, input) : Input.t) (model : Model.t) =
+    let text_dimensions (font_info : Attr.KindSpec.Text.t) text =
+      Revery_Draw.Text.dimensions
+        ~smoothing:Revery.Font.Smoothing.default
+        ~fontFamily:font_info.family
+        ~fontSize:font_info.size
+        ~fontWeight:font_info.weight
+        text
+
+
+    let measure_text_width font_info text =
+      let dims = text_dimensions font_info text in
+      dims.width
+
+
+    let measure_text_height (font_info : Attr.KindSpec.Text.t) =
+      Revery_Draw.Text.lineHeight
+        ~italic:font_info.italicized
+        font_info.family
+        font_info.size
+        font_info.weight
+
+
+    (* FIXME: Need to deal with really long word case, where the container
+     * is overflown by a long unbroken "word". It should be broken up somehow. *)
+    (* FIXME: Bigger problem than just this function, but multiple newlines
+     * in a row are basically ignored by string insertions. Will likely have to
+     * rewrite the insertString (etc) helpers from Revery as well. *)
+    let measure_text_dims font_info line_height margin text =
+      let measure_width = measure_text_width font_info in
+      let lines = String.split_lines text in
+      let x_offset, y_count =
+        List.fold
+          ~init:(0., Int.max 0 (List.length lines - 1))
+          ~f:(fun (x, total_y) line ->
+            let inner (acc, y) word =
+              let ext = acc ^ " " ^ word in
+              if Float.(measure_width ext > margin) then word, y + 1 else ext, y in
+            let line_x, line_y =
+              match String.split ~on:' ' line with
+              | [] -> 0., 0
+              | [ h ] -> measure_width h, 0
+              | h :: t ->
+                let l, y' = List.fold ~init:(h, 0) ~f:inner t in
+                measure_width l, y' in
+            line_x, line_y + total_y)
+          lines in
+      x_offset, Float.(of_int y_count * line_height)
+
+
+    (* FIXME: Need to solve not showing one line of over flow. The true height
+     * of the text block is the offset, plus the height of a line.
+     * Also, there is a bug, not sure if scroll related, where no text appears
+     * until a new line is made, after either adding a todo or backspacing to no value. *)
+    let scroll container_height line_height y_offset scroll_offset =
+      let open Float in
+      let y_offset = if y_offset >. 0. then y_offset + line_height else y_offset in
+      if y_offset < scroll_offset
+      then y_offset
+      else if y_offset - scroll_offset > container_height
+      then y_offset - container_height
+      else scroll_offset
+
+
+    (* TODO: After other stuff is working, convert this to deal with X and Y. *)
+    let index_nearest_offset ~measure text offset =
+      let length = String.length text in
+      let rec loop ~last i =
+        if i > length
+        then i - 1
+        else (
+          let width = measure (String.sub text 0 i) in
+          if width > offset
+          then (
+            let isCurrentNearest = width - offset < offset - last in
+            if isCurrentNearest then i else i - 1 )
+          else loop ~last:width (i + 1) ) in
+      loop ~last:0 1
+
+
+    let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
-      let attributes = Attr.make ~default_style ~default_kind input.attributes in
+      let attributes = Attr.make ~default_style ~default_kind props.attributes in
       let font_info =
         match attributes.kind with
         | TextNode spec -> spec
         | _ -> Attr.KindSpec.Text.default in
-      let value = Option.first_some model.value input.default_value |> Option.value ~default:"" in
+      let value = Option.first_some model.value props.default_value |> Option.value ~default:"" in
       let set_value value = inject (Action.Set_value value) in
       let show_placeholder = String.equal value "" in
-      let scroll_offset = model.scroll_offset in
-      let cursor_position = min model.cursor_position (String.length value) in
 
-      let measure_text_width text =
-        let dimensions =
-          Revery_Draw.Text.dimensions
-            ~smoothing:Revery.Font.Smoothing.default
-            ~fontFamily:font_info.family
-            ~fontSize:font_info.size
-            ~fontWeight:font_info.weight
-            text in
-        Float.to_int dimensions.width in
+      (* let cursor_position = min model.cursor_position (String.length value) in *)
+      let cursor_position = model.cursor_position in
 
-      (* NOTE: This was used for cursor position before (see Text_input). Now,
-       * this box will have to have a scroll bar, which will have to be adjusted when
-       * the cursor would move out of the box. Scrolling is of course only a vertical
-       * thing for this component. *)
-      let () = scroll_offset := 0 in
-
+      (* let measure_text_width text = measure_text_width' font_info text in *)
       let update value cursor_position = inject (Action.Text_input (value, cursor_position)) in
 
       let paste value cursor_position =
@@ -1479,6 +1559,8 @@ module Text_area = struct
 
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
         let event =
+          (* TODO: Up and Down navigation. Requires reimplementation of nearest
+           * index, or similar. *)
           match keyboard_event.key with
           | Left ->
             let cursor_position = getSafeStringBounds value cursor_position (-1) in
@@ -1494,43 +1576,37 @@ module Text_area = struct
             inject (Action.Text_input (value, cursor_position))
           | V when keyboard_event.ctrl -> paste value cursor_position
           | Return when keyboard_event.shift ->
-            (* TODO: Change how update works since cursor position behaviour is
-             * going to be different. *)
             let value, cursor_position = insertString value "\n" cursor_position in
             update value cursor_position
           | Escape ->
             UI.Focus.loseFocus ();
             Event.no_op
           | _ -> Event.no_op in
-        Event.Many [ event; input.on_key_down keyboard_event value set_value ] in
+        Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
+      (* TODO: Re-implement after everything else is working. *)
       let handle_click (event : Node_events.Mouse_button.t) =
         match model.text_node with
         | Some node ->
-          let sceneOffsets = (node#getSceneOffsets () : UI.Offset.t) in
-          let textOffset = int_of_float event.mouseX - sceneOffsets.left + !scroll_offset in
-          let cursor_position =
-            Revery_Draw.Text.indexNearestOffset ~measure:measure_text_width value textOffset in
-
+          (* let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in *)
+          (* let text_offset = int_of_float event.mouseX - scene_offsets.left + model.scroll_offset in
+           * let cursor_position = index_nearest_offset ~measure:measure_text_width value text_offset in *)
+          let cursor_position = 0 in
           Option.iter model.input_node ~f:UI.Focus.focus;
-
           update value cursor_position
         | None -> Event.no_op in
 
       let cursor =
-        (* TODO: Need to calculate position taking into account wrap somehow. Is this
-         * even possible given not really knowing easily when the wrap happened?
-         * Knowing when the transition to the next line happened depends on knowing
-         * how long the last word was (that caused the wrap). So each time, does the string
-         * position of the last char before the wrap have to be marked, so that the same
-         * calculation can be done on the next line and so on? Doesn't sound that bad
-         * actually, now that I think about it... *)
-        let startStr, _ = getStringParts cursor_position value in
-        let textWidth = measure_text_width startStr in
-        let offset = textWidth - !scroll_offset in
+        let y_offset = model.y_offset -. model.scroll_offset in
+        let cursor_style =
+          Style.
+            [ position `Absolute
+            ; margin_top 2
+            ; transform [ TranslateX model.x_offset; TranslateY y_offset ]
+            ] in
         tick ~every:(if model.focused then Time.Span.of_ms 16.0 else Time.Span.of_hr 1.0)
         @@ box
-             Attr.[ style (Styles.cursor ~offset) ]
+             Attr.[ style cursor_style ]
              [ opacity
                  ~opacity:(if model.focused && cursor_on then 1.0 else 0.0)
                  [ box
@@ -1539,7 +1615,7 @@ module Text_area = struct
                            Style.
                              [ width Constants.cursorWidth
                              ; height (Float.to_int font_info.size)
-                             ; background_color input.cursor_color
+                             ; background_color props.cursor_color
                              ]
                        ]
                      []
@@ -1549,14 +1625,14 @@ module Text_area = struct
       let attributes =
         Attr.(
           node_ref (fun node ->
-              if input.autofocus then UI.Focus.focus node;
+              if props.autofocus then UI.Focus.focus node;
               inject (Action.Set_input_node node))
           :: on_mouse_down handle_click
           :: on_key_down handle_key_down
           :: on_text_input handle_text_input
           :: on_focus (inject Action.Focus)
           :: on_blur (inject Action.Blur)
-          :: input.attributes)
+          :: props.attributes)
         |> Attr.make ~default_style ~default_kind in
 
       attributes.style
@@ -1578,17 +1654,17 @@ module Text_area = struct
                            Style.
                              [ color
                                  ( if show_placeholder
-                                 then input.placeholder_color
+                                 then props.placeholder_color
                                  else attributes.style.color )
-                             ; align_items `Center
                              ; justify_content `FlexStart
-                             ; text_wrap WrapIgnoreWhitespace
-                             ; flex_direction `Column
-                             ; transform [ TranslateX (-.Float.of_int !scroll_offset) ]
+                             ; align_items `Center
+                             ; text_wrap Wrap
+                             ; transform [ TranslateY (-.model.scroll_offset) ]
+                             ; min_height (Int.of_float (measure_text_height font_info))
                              ]
                        ; kind attributes.kind
                        ]
-                     (if show_placeholder then input.placeholder else value)
+                     (if show_placeholder then props.placeholder else value)
                  ]
              ; cursor
              ]) in
@@ -1596,19 +1672,49 @@ module Text_area = struct
       value, set_value, view
 
 
-    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
+    let get_font_info (attrs : Attr.t list) =
+      List.find_map
+        ~f:(function
+            | Kind (TextNode info) -> Some info
+            | _ -> None)
+        attrs
+      |> Option.value ~default:default_text_spec
+
+
+    let apply_action ~inject ~schedule_event ((cursor_on, props) : Input.t) (model : Model.t)
+      = function
       | Action.Focus ->
         Sdl2.TextInput.start ();
         { model with focused = true }
       | Blur ->
         Sdl2.TextInput.stop ();
         { model with focused = false }
-      | Text_input (value, cursor_position) -> { model with value = Some value; cursor_position }
+      | Text_input (value, cursor_position) ->
+        schedule_event (inject Action.UpdateOffsets);
+        { model with value = Some value; cursor_position }
       | Set_value value ->
-        { model with
-          value = Some value
-        ; cursor_position = min model.cursor_position (String.length value)
-        }
+        let cursor_position = min model.cursor_position (String.length value) in
+        schedule_event (inject Action.UpdateOffsets);
+        { model with value = Some value; cursor_position }
+      | UpdateOffsets ->
+        let value = Option.value ~default:"" model.value in
+        let cursor_position = min model.cursor_position (String.length value) in
+        ( match Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
+        | Some node ->
+          let font_info = get_font_info props.attributes in
+          let container : UI.Dimensions.t = node#measurements () in
+          let style : UI.Style.t = node#getStyle () in
+          let line_height = measure_text_height font_info *. style.lineHeight in
+          let x_offset, y_offset =
+            measure_text_dims
+              font_info
+              line_height
+              (Float.of_int container.width)
+              (String.sub ~pos:0 ~len:cursor_position value) in
+          let scroll_offset =
+            scroll (Float.of_int container.height) line_height y_offset model.scroll_offset in
+          { model with x_offset; y_offset; scroll_offset }
+        | None -> model )
       | Set_text_node node -> { model with text_node = Some node }
       | Set_input_node node -> { model with input_node = Some node }
   end
@@ -1619,18 +1725,7 @@ module Text_area = struct
       >>| fun time ->
       Int.rem (Time_ns.to_span_since_epoch time |> Time_ns.Span.to_int_ms) 1000 > 500 in
 
-    let component =
-      Bonsai.of_module
-        (module T)
-        ~default_model:
-          T.Model.
-            { focused = false
-            ; value = None
-            ; cursor_position = 0
-            ; text_node = None
-            ; input_node = None
-            ; scroll_offset = ref 0
-            } in
+    let component = Bonsai.of_module (module T) ~default_model:T.Model.default in
 
     let cutoff =
       Bonsai.With_incr.value_cutoff
