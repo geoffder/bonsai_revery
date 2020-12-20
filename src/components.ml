@@ -1472,6 +1472,20 @@ module Text_area = struct
         font_info.weight
 
 
+    let get_line_height font_info node =
+      let style : UI.Style.t = node#getStyle () in
+      style.lineHeight *. measure_text_height font_info
+
+
+    let get_font_info (attrs : Attr.t list) =
+      List.find_map
+        ~f:(function
+            | Kind (TextNode info) -> Some info
+            | _ -> None)
+        attrs
+      |> Option.value ~default:default_text_spec
+
+
     (* FIXME: Need to deal with really long word case, where the container
      * is overflown by a long unbroken "word". It should be broken up somehow. *)
     (* FIXME: Bigger problem than just this function, but multiple newlines
@@ -1554,13 +1568,11 @@ module Text_area = struct
         | TextNode spec -> spec
         | _ -> Attr.KindSpec.Text.default in
       let value = Option.first_some model.value props.default_value |> Option.value ~default:"" in
-      let set_value value = inject (Action.Set_value value) in
       let show_placeholder = String.equal value "" in
-
-      (* let cursor_position = min model.cursor_position (String.length value) in *)
       let cursor_position = model.cursor_position in
 
       let measure_text_width text = measure_text_width font_info text in
+      let set_value value = inject (Action.Set_value value) in
       let update value cursor_position = inject (Action.Text_input (value, cursor_position)) in
 
       let paste value cursor_position =
@@ -1608,8 +1620,7 @@ module Text_area = struct
         match model.text_node, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
         | Some node, Some parent ->
           let container : UI.Dimensions.t = parent#measurements () in
-          let style : UI.Style.t = node#getStyle () in
-          let line_height = measure_text_height font_info *. style.lineHeight in
+          let line_height = get_line_height font_info node in
           let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
           let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
           let x_text_offset = event.mouseX -. Float.of_int scene_offsets.left in
@@ -1700,17 +1711,7 @@ module Text_area = struct
       value, set_value, view
 
 
-    let get_font_info (attrs : Attr.t list) =
-      List.find_map
-        ~f:(function
-            | Kind (TextNode info) -> Some info
-            | _ -> None)
-        attrs
-      |> Option.value ~default:default_text_spec
-
-
-    let apply_action ~inject ~schedule_event ((cursor_on, props) : Input.t) (model : Model.t)
-      = function
+    let apply_action ~inject ~schedule_event ((_, props) : Input.t) (model : Model.t) = function
       | Action.Focus ->
         Sdl2.TextInput.start ();
         { model with focused = true }
@@ -1731,8 +1732,7 @@ module Text_area = struct
         | Some node ->
           let font_info = get_font_info props.attributes in
           let container : UI.Dimensions.t = node#measurements () in
-          let style : UI.Style.t = node#getStyle () in
-          let line_height = measure_text_height font_info *. style.lineHeight in
+          let line_height = get_line_height font_info node in
           let x_offset, y_offset =
             measure_text_dims
               font_info
