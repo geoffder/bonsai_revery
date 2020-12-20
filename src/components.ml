@@ -1540,24 +1540,29 @@ module Text_area = struct
       let x_offset = Float.max 0. x_offset in
       let rec find_row_start ~last_y ~last_start i =
         if i > length
-        then last_start
+        then last_y, last_start
         else (
           let _, height = measure (String.sub text 0 i) in
           if Float.(height > y_offset)
-          then if Float.(height - y_offset < y_offset - last_y) then i else last_start
+          then (
+            let start = if Float.(height - y_offset < y_offset - last_y) then i else last_start in
+            last_y, start )
           else (
             let last_y, last_start =
               if Float.(height > last_y) then height, i else last_y, last_start in
             find_row_start ~last_y ~last_start (i + 1) ) ) in
+      let row_y, row_i = find_row_start ~last_y:0. ~last_start:0 1 in
       let rec loop ~last_x i =
         if i > length
         then length
         else (
-          let width, _ = measure (String.sub text 0 i) in
-          if Float.(width > x_offset)
+          let width, height = measure (String.sub text 0 i) in
+          if Float.(height > row_y)
+          then i - 1 (* last char of searched row *)
+          else if Float.(width > x_offset)
           then if Float.(width - x_offset < x_offset - last_x) then i else i - 1
           else loop ~last_x:width (i + 1) ) in
-      loop ~last_x:0. (find_row_start ~last_y:0. ~last_start:0 1)
+      loop ~last_x:0. row_i
 
 
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
