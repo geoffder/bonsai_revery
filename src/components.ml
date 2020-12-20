@@ -1489,8 +1489,11 @@ module Text_area = struct
     (* FIXME: Need to deal with really long word case, where the container
      * is overflown by a long unbroken "word". It should be broken up somehow. *)
     (* FIXME: Bigger problem than just this function, but multiple newlines
-     * in a row are basically ignored by string insertions. Will likely have to
-     * rewrite the insertString (etc) helpers from Revery as well. *)
+     * in a row are basically ignored by string insertions. Revery does seem to ignore
+     * multiple newlines in a row, collapsing them, but placing a space after each one
+     * preserves the lines. HOWEVER, doing it with user input here doesn't work. Possibly
+     * due to either (or combination) of how I treat whitespace in this function, and
+     * possibly the Revery insertString helper? Need to investigate. *)
     let measure_text_dims font_info line_height margin text =
       let measure_width = measure_text_width font_info in
       let lines = String.split_lines text in
@@ -1510,7 +1513,10 @@ module Text_area = struct
                 measure_width l, y' in
             line_x, line_y + total_y)
           lines in
-      x_offset, Float.(of_int y_count * line_height)
+      let y_offset = Float.(of_int y_count * line_height) in
+      if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
+      then 0., y_offset +. line_height
+      else x_offset, y_offset
 
 
     (* FIXME: There is some glitchyness as scrolling occurs when the container
@@ -1531,9 +1537,6 @@ module Text_area = struct
       else 0.
 
 
-    (* FIXME: Cursor still displays after last char of previous line when clicking
-     * before the first of a line. This is cursor vs newline related though I believe,
-     * as seen in the issue with RETURN not moving cursor down until new entries. *)
     let index_nearest_offset ~measure x_offset y_offset text =
       let length = String.length text in
       (* necessary? harmful? *)
