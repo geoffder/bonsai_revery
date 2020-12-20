@@ -1565,6 +1565,19 @@ module Text_area = struct
       loop ~last_x:0. row_i
 
 
+    let vertical_nav ~up text_node font_info start_position text =
+      match text_node, Option.bind text_node ~f:(fun n -> n#getParent ()) with
+      | Some node, Some parent ->
+        let container : UI.Dimensions.t = parent#measurements () in
+        let line_height = get_line_height font_info node in
+        let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
+        let target_x, start_y = measure (String.sub text 0 start_position) in
+        let target_y = start_y +. if up then -.line_height else line_height in
+        let cursor_position = index_nearest_offset ~measure target_x target_y text in
+        cursor_position
+      | _ -> start_position
+
+
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
       let attributes = Attr.make ~default_style ~default_kind props.attributes in
@@ -1602,6 +1615,14 @@ module Text_area = struct
           | Right ->
             let cursor_position = getSafeStringBounds value cursor_position 1 in
             inject (Action.Text_input (value, cursor_position))
+          | Up ->
+            let cursor_position =
+              vertical_nav ~up:true model.text_node font_info cursor_position value in
+            update value cursor_position
+          | Down ->
+            let cursor_position =
+              vertical_nav ~up:false model.text_node font_info cursor_position value in
+            update value cursor_position
           | Delete ->
             let value, cursor_position = removeCharacterAfter value cursor_position in
             inject (Action.Text_input (value, cursor_position))
