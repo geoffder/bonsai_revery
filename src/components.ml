@@ -1579,9 +1579,8 @@ module Text_area = struct
        by Revery text wrapping. *)
     let newline_hack text =
       let f (was_newline, acc) c =
-        let s = String.of_char c in
         let is_newline = Char.equal '\n' c in
-        is_newline, if was_newline && is_newline then acc ^ " " ^ s else acc ^ s in
+        is_newline, if was_newline && is_newline then acc ^ " \n" else acc ^ String.of_char c in
       let _, hacked = String.fold ~f ~init:(false, "") text in
       hacked
 
@@ -1740,7 +1739,7 @@ module Text_area = struct
                  ]
              ; cursor
              ]) in
-      Log.perf value (fun () -> ());
+
       value, set_value, view
 
 
