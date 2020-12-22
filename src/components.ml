@@ -1488,12 +1488,6 @@ module Text_area = struct
 
     (* FIXME: Need to deal with really long word case, where the container
      * is overflown by a long unbroken "word". It should be broken up somehow. *)
-    (* FIXME: Bigger problem than just this function, but multiple newlines
-     * in a row are basically ignored by string insertions. Revery does seem to ignore
-     * multiple newlines in a row, collapsing them, but placing a space after each one
-     * preserves the lines. HOWEVER, doing it with user input here doesn't work. Possibly
-     * due to either (or combination) of how I treat whitespace in this function, and
-     * possibly the Revery insertString helper? Need to investigate. *)
     let measure_text_dims font_info line_height margin text =
       let measure_width = measure_text_width font_info in
       let lines = String.split_lines text in
@@ -1581,6 +1575,17 @@ module Text_area = struct
       | _ -> start_position
 
 
+    (* Add spaces between consecutive newline characters to ensure they are not collapsed/combined
+       by Revery text wrapping. *)
+    let newline_hack text =
+      let f (was_newline, acc) c =
+        let s = String.of_char c in
+        let is_newline = Char.equal '\n' c in
+        is_newline, if was_newline && is_newline then acc ^ " " ^ s else acc ^ s in
+      let _, hacked = String.fold ~f ~init:(false, "") text in
+      hacked
+
+
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
       let attributes = Attr.make ~default_style ~default_kind props.attributes in
@@ -1608,9 +1613,8 @@ module Text_area = struct
         update value cursor_position in
 
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
+        (* TODO: Add word deletion with C-Backspace. *)
         let event =
-          (* TODO: Up and Down navigation. Requires reimplementation of nearest
-           * index, or similar. Intermediary function that feeds into nearest index? *)
           match keyboard_event.key with
           | Left ->
             let cursor_position = getSafeStringBounds value cursor_position (-1) in
@@ -1726,17 +1730,17 @@ module Text_area = struct
                                  else attributes.style.color )
                              ; justify_content `FlexStart
                              ; align_items `Center
-                             ; text_wrap Wrap
+                             ; text_wrap WrapIgnoreWhitespace
                              ; transform [ TranslateY (-.model.scroll_offset) ]
                              ; min_height (Int.of_float (measure_text_height font_info))
                              ]
                        ; kind attributes.kind
                        ]
-                     (if show_placeholder then props.placeholder else value)
+                     (if show_placeholder then props.placeholder else newline_hack value)
                  ]
              ; cursor
              ]) in
-
+      Log.perf value (fun () -> ());
       value, set_value, view
 
 
