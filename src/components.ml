@@ -1487,7 +1487,11 @@ module Text_area = struct
 
 
     (* FIXME: Need to deal with really long word case, where the container
-     * is overflown by a long unbroken "word". It should be broken up somehow. *)
+     * is overflown by a long unbroken "word". It should be broken up somehow, otherwise
+     * it's possible to extend out of the window. Don't really want to introduce newlines
+     * to the actual value though, should only do at the display stage. Honestly, should
+     * think of doing a PR on the Revery wrapping side to make wrapping like I want an
+     * option. *)
     let measure_text_dims font_info line_height margin text =
       let measure_width = measure_text_width font_info in
       let lines = String.split_lines text in
@@ -1585,6 +1589,49 @@ module Text_area = struct
       hacked
 
 
+    let end_chars = Set.of_list (module Char) [ '\n'; ' '; '/'; '_'; '-'; ','; '.'; ';'; '"' ]
+
+    let chars_to_next_word_end str =
+      let len = String.length str in
+      if len > 0
+      then (
+        let rec loop i = if i = len || Set.mem end_chars str.[i] then i else loop (i + 1) in
+        loop 1 )
+      else 0
+
+
+    let chars_to_previous_word_end str =
+      let len = String.length str in
+      if len > 0
+      then (
+        let sub_len = len - 1 in
+        let rec loop i =
+          if i = len || Set.mem end_chars str.[sub_len - i] then i else loop (i + 1) in
+        loop 1 )
+      else 0
+
+
+    let remove_word_before text cursor_position =
+      let open Revery.UI.Components.Input in
+      let before, after = getStringParts cursor_position text in
+      if String.length before > 0
+      then (
+        let next_position = cursor_position - chars_to_previous_word_end before in
+        let new_text = Str.string_before before next_position ^ after in
+        new_text, next_position )
+      else after, cursor_position
+
+
+    let remove_word_after text cursor_position =
+      let open Revery.UI.Components.Input in
+      let before, after = getStringParts cursor_position text in
+      let new_text =
+        if String.length after > 0
+        then Str.string_after after (chars_to_next_word_end after)
+        else before in
+      new_text, cursor_position
+
+
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
       let attributes = Attr.make ~default_style ~default_kind props.attributes in
@@ -1612,14 +1659,23 @@ module Text_area = struct
         update value cursor_position in
 
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
-        (* TODO: Add word deletion with C-Backspace. *)
         let event =
           match keyboard_event.key with
           | Left ->
-            let cursor_position = getSafeStringBounds value cursor_position (-1) in
+            let cursor_position =
+              if keyboard_event.ctrl
+              then (
+                let before, _ = getStringParts cursor_position value in
+                cursor_position - chars_to_previous_word_end before )
+              else getSafeStringBounds value cursor_position (-1) in
             inject (Action.Text_input (value, cursor_position))
           | Right ->
-            let cursor_position = getSafeStringBounds value cursor_position 1 in
+            let cursor_position =
+              if keyboard_event.ctrl
+              then (
+                let _, after = getStringParts cursor_position value in
+                cursor_position + chars_to_next_word_end after )
+              else getSafeStringBounds value cursor_position 1 in
             inject (Action.Text_input (value, cursor_position))
           | Up ->
             let cursor_position =
@@ -1630,10 +1686,16 @@ module Text_area = struct
               vertical_nav ~up:false model.text_node font_info cursor_position value in
             update value cursor_position
           | Delete ->
-            let value, cursor_position = removeCharacterAfter value cursor_position in
+            let value, cursor_position =
+              if keyboard_event.ctrl
+              then remove_word_after value cursor_position
+              else removeCharacterAfter value cursor_position in
             inject (Action.Text_input (value, cursor_position))
           | Backspace ->
-            let value, cursor_position = removeCharacterBefore value cursor_position in
+            let value, cursor_position =
+              if keyboard_event.ctrl
+              then remove_word_before value cursor_position
+              else removeCharacterBefore value cursor_position in
             inject (Action.Text_input (value, cursor_position))
           | V when keyboard_event.ctrl -> paste value cursor_position
           | Return when keyboard_event.shift ->
