@@ -1401,7 +1401,8 @@ module Text_area = struct
         ; cursor_position : int
         ; x_offset : float
         ; y_offset : float
-        ; scroll_offset : float
+        ; x_scroll : float
+        ; y_scroll : float
         }
       [@@deriving equal, sexp]
 
@@ -1413,7 +1414,8 @@ module Text_area = struct
         ; cursor_position = 0
         ; x_offset = 0.
         ; y_offset = 0.
-        ; scroll_offset = 0.
+        ; x_scroll = 0.
+        ; y_scroll = 0.
         }
     end
 
@@ -1495,10 +1497,10 @@ module Text_area = struct
     let measure_text_dims font_info line_height margin text =
       let measure_width = measure_text_width font_info in
       let lines = String.split_lines text in
-      let x_offset, y_count =
+      let max_x_offset, x_offset, y_count =
         List.fold
-          ~init:(0., Int.max 0 (List.length lines - 1))
-          ~f:(fun (x, total_y) line ->
+          ~init:(0., 0., Int.max 0 (List.length lines - 1))
+          ~f:(fun (max_x, x, total_y) line ->
             let inner (acc, y) word =
               let ext = acc ^ " " ^ word in
               if Float.(measure_width ext > margin) then word, y + 1 else ext, y in
@@ -1509,29 +1511,44 @@ module Text_area = struct
               | h :: t ->
                 let l, y' = List.fold ~init:(h, 0) ~f:inner t in
                 measure_width l, y' in
-            line_x, line_y + total_y)
+            Float.max max_x line_x, line_x, line_y + total_y)
           lines in
       let y_offset = Float.(of_int y_count * line_height) in
       if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
-      then 0., y_offset +. line_height
-      else x_offset, y_offset
+      then max_x_offset, 0., y_offset +. line_height
+      else max_x_offset, x_offset, y_offset
 
 
     (* FIXME: There is some glitchyness as scrolling occurs when the container
      * is growing. Not sure where the origin is, obv probably not here, but need
      * to investigate. *)
-    let scroll container_height text_height line_height y_offset scroll_offset =
+    let vertical_scroll container_height text_height line_height y_offset y_scroll =
       let open Float in
       if text_height > container_height
       then (
         let offset =
-          if y_offset < scroll_offset
+          if y_offset < y_scroll
           then y_offset
-          else if y_offset + line_height - scroll_offset > container_height
+          else if y_offset + line_height - y_scroll > container_height
           then y_offset + line_height - container_height
-          else scroll_offset in
+          else y_scroll in
         (* Make sure all the space is used to show text (no overscroll). *)
         Float.clamp_exn ~min:0. ~max:(text_height -. container_height) offset )
+      else 0.
+
+
+    let horizontal_scroll margin text_width x_offset x_scroll =
+      let open Float in
+      if text_width > margin
+      then (
+        let offset =
+          if x_offset < x_scroll
+          then x_offset
+          else if x_offset - x_scroll > margin
+          then x_offset - margin
+          else x_scroll in
+        (* Make sure all the space is used to show text (no overscroll). *)
+        Float.clamp_exn ~min:0. ~max:(text_width -. margin) offset )
       else 0.
 
 
@@ -1543,7 +1560,7 @@ module Text_area = struct
         if i > length
         then last_y, last_start
         else (
-          let _, height = measure (String.sub text 0 i) in
+          let _, _, height = measure (String.sub text 0 i) in
           if Float.(height > y_offset)
           then (
             let start = if Float.(height - y_offset < y_offset - last_y) then i else last_start in
@@ -1557,7 +1574,7 @@ module Text_area = struct
         if i > length
         then length
         else (
-          let width, height = measure (String.sub text 0 i) in
+          let _, width, height = measure (String.sub text 0 i) in
           if Float.(height > row_y)
           then i - 1 (* last char of searched row *)
           else if Float.(width > x_offset)
@@ -1572,7 +1589,7 @@ module Text_area = struct
         let container : UI.Dimensions.t = parent#measurements () in
         let line_height = get_line_height font_info node in
         let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
-        let target_x, start_y = measure (String.sub text 0 start_position) in
+        let _, target_x, start_y = measure (String.sub text 0 start_position) in
         let target_y = start_y +. if up then -.line_height else line_height in
         let cursor_position = index_nearest_offset ~measure target_x target_y text in
         cursor_position
@@ -1718,20 +1735,20 @@ module Text_area = struct
           let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
           let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
           let x_text_offset = event.mouseX -. Float.of_int scene_offsets.left in
-          let y_text_offset =
-            event.mouseY -. Float.of_int scene_offsets.top +. model.scroll_offset in
+          let y_text_offset = event.mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
           let cursor_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
           Option.iter model.input_node ~f:UI.Focus.focus;
           update value cursor_position
         | _ -> Event.no_op in
 
       let cursor =
-        let y_offset = model.y_offset -. model.scroll_offset in
+        let x_offset = model.x_offset -. model.x_scroll in
+        let y_offset = model.y_offset -. model.y_scroll in
         let position_style =
           Style.
             [ position `Absolute
             ; margin_top 2
-            ; transform [ TranslateX model.x_offset; TranslateY y_offset ]
+            ; transform [ TranslateX x_offset; TranslateY y_offset ]
             ] in
         tick ~every:(if model.focused then Time.Span.of_ms 16.0 else Time.Span.of_hr 1.0)
         @@ box
@@ -1792,7 +1809,8 @@ module Text_area = struct
                              ; justify_content `FlexStart
                              ; align_items `Center
                              ; text_wrap WrapIgnoreWhitespace
-                             ; transform [ TranslateY (-.model.scroll_offset) ]
+                             ; transform
+                                 [ TranslateX (-.model.x_scroll); TranslateY (-.model.y_scroll) ]
                              ; min_height (Int.of_float (measure_text_height font_info))
                              ]
                        ; kind attributes.kind
@@ -1827,22 +1845,28 @@ module Text_area = struct
           let font_info = get_font_info props.attributes in
           let container : UI.Dimensions.t = node#measurements () in
           let line_height = get_line_height font_info node in
-          let x_offset, y_offset =
+          let _, x_offset, y_offset =
             measure_text_dims
               font_info
               line_height
               (Float.of_int container.width)
               (String.sub ~pos:0 ~len:cursor_position value) in
-          let _, max_y_offset =
+          let max_x_offset, _, max_y_offset =
             measure_text_dims font_info line_height (Float.of_int container.width) value in
-          let scroll_offset =
-            scroll
+          let x_scroll =
+            horizontal_scroll
+              (Float.of_int container.width -. measure_text_width font_info "_")
+              max_x_offset
+              x_offset
+              model.x_scroll in
+          let y_scroll =
+            vertical_scroll
               (Float.of_int container.height)
               (max_y_offset +. line_height)
               line_height
               y_offset
-              model.scroll_offset in
-          { model with x_offset; y_offset; scroll_offset }
+              model.y_scroll in
+          { model with x_offset; y_offset; x_scroll; y_scroll }
         | None -> model )
       | Set_text_node node -> { model with text_node = Some node }
       | Set_input_node node -> { model with input_node = Some node }
