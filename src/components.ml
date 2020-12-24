@@ -1227,7 +1227,7 @@ module ScrollView = struct
         ; y : slider
         }
 
-      type t = control * sliders * Element.t Map.M(Int).t * props
+      type t = control * sliders * Element.t list * props
     end
 
     open Action
@@ -1290,7 +1290,7 @@ module ScrollView = struct
             :: node_ref (fun n -> inject (SetViewNode n))
             :: style Style.(overflow `Hidden :: props.styles)
             :: props.attributes)
-          (Map.mapi ~f:(fun ~key ~data -> box trans [ data ]) children |> Map.data) in
+          (List.map ~f:(fun c -> box trans [ c ]) children) in
 
       let element =
         let inner_box =
@@ -1359,30 +1359,36 @@ end
 module Text_area = struct
   type props =
     { autofocus : bool
+    ; text_color : (Color.t[@sexp.opaque])
     ; cursor_color : (Color.t[@sexp.opaque])
     ; placeholder : string
     ; placeholder_color : (Color.t[@sexp.opaque])
     ; default_value : string option
     ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
+    ; max_height : int
     ; attributes : Attr.t list
     }
   [@@deriving sexp_of]
 
   let props
       ?(autofocus = false)
+      ?(text_color = Colors.black)
       ?(cursor_color = Revery.UI.Components.Input.Styles.defaultCursorColor)
       ?(placeholder = "")
       ?(placeholder_color = Revery.UI.Components.Input.Styles.defaultPlaceholderColor)
       ?default_value
       ?(on_key_down = fun _ _ _ -> Event.no_op)
+      ?(max_height = Int.max_value)
       attributes
     =
     { autofocus
+    ; text_color
     ; cursor_color
     ; placeholder
     ; placeholder_color
     ; default_value
     ; on_key_down
+    ; max_height
     ; attributes
     }
 
@@ -1435,18 +1441,18 @@ module Text_area = struct
       type t = string * (string -> Event.t) * Element.t
     end
 
-    let name = "Input"
+    let name = "InputArea"
 
-    let default_style =
-      let open Revery.UI.LayoutTypes in
-      { Attr.default_style with
-        color = Colors.black
-      ; cursor = Some Revery.MouseCursors.text
-      ; flexDirection = Revery.UI.LayoutTypes.Row
-      ; alignItems = AlignFlexStart
-      ; justifyContent = JustifyFlexStart
-      ; maxHeight = 150 (* NOTE: for testing *)
-      }
+    let styles =
+      Style.
+        [ cursor `Text
+        ; flex_direction `Row (* ; align_items `FlexStart *)
+        ; align_items `Center
+        ; margin_left 10
+        ; margin_right 10
+        ; flex_grow 1
+        ; justify_content `FlexStart
+        ]
 
 
     let default_text_spec = { Attr.KindSpec.Text.default with size = 18. }
@@ -1651,11 +1657,7 @@ module Text_area = struct
 
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
-      let attributes = Attr.make ~default_style ~default_kind props.attributes in
-      let font_info =
-        match attributes.kind with
-        | TextNode spec -> spec
-        | _ -> Attr.KindSpec.Text.default in
+      let font_info = get_font_info props.attributes in
       let value = Option.first_some model.value props.default_value |> Option.value ~default:"" in
       let show_placeholder = String.equal value "" in
       let cursor_position = model.cursor_position in
@@ -1724,9 +1726,6 @@ module Text_area = struct
           | _ -> Event.no_op in
         Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
-      (* TODO: A lot of this is shared with lines in UpdateOffsets. Could be that
-       * some could be factored into a function. Especially considering handling
-       * up and down key nav is probably going to need some of the same as well. *)
       let handle_click (event : Node_events.Mouse_button.t) =
         match model.text_node, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
         | Some node, Some parent ->
@@ -1778,47 +1777,39 @@ module Text_area = struct
           :: on_text_input handle_text_input
           :: on_focus (inject Action.Focus)
           :: on_blur (inject Action.Blur)
-          :: props.attributes)
-        |> Attr.make ~default_style ~default_kind in
-
-      attributes.style
-        <- { attributes.style with
-             cursor = Option.first_some attributes.style.cursor (Some Revery.MouseCursors.text)
-           };
+          :: style Style.(max_height props.max_height :: styles)
+          :: props.attributes) in
 
       let view =
-        clickable_box
+        box
           attributes
-          (box
-             Attr.[ style Styles.marginContainer ]
-             [ box
-                 Attr.
-                   [ style
-                       Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
-                   ; on_dimensions_changed (fun d -> inject Action.UpdateOffsets)
-                   ]
-                 [ text
-                     Attr.
-                       [ node_ref (fun node -> inject (Action.Set_text_node node))
-                       ; style
-                           Style.
-                             [ color
-                                 ( if show_placeholder
-                                 then props.placeholder_color
-                                 else attributes.style.color )
-                             ; justify_content `FlexStart
-                             ; align_items `Center
-                             ; text_wrap WrapIgnoreWhitespace
-                             ; transform
-                                 [ TranslateX (-.model.x_scroll); TranslateY (-.model.y_scroll) ]
-                             ; min_height (Int.of_float (measure_text_height font_info))
-                             ]
-                       ; kind attributes.kind
-                       ]
-                     (if show_placeholder then props.placeholder else newline_hack value)
-                 ]
-             ; cursor
-             ]) in
+          [ box
+              Attr.
+                [ style Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
+                ; on_dimensions_changed (fun d -> inject Action.UpdateOffsets)
+                ]
+              [ text
+                  Attr.
+                    [ node_ref (fun node -> inject (Action.Set_text_node node))
+                    ; style
+                        Style.
+                          [ color
+                              ( if show_placeholder
+                              then props.placeholder_color
+                              else props.text_color )
+                          ; justify_content `FlexStart
+                          ; align_items `Center
+                          ; text_wrap WrapIgnoreWhitespace
+                          ; transform
+                              [ TranslateX (-.model.x_scroll); TranslateY (-.model.y_scroll) ]
+                          ; min_height (Int.of_float (measure_text_height font_info))
+                          ]
+                    ; kind (TextNode font_info)
+                    ]
+                  (if show_placeholder then props.placeholder else newline_hack value)
+              ]
+          ; cursor
+          ] in
 
       value, set_value, view
 

@@ -107,21 +107,25 @@ module Components : sig
   module Text_area : sig
     type props =
       { autofocus : bool
+      ; text_color : Color.t
       ; cursor_color : Color.t
       ; placeholder : string
       ; placeholder_color : Color.t
       ; default_value : string option
       ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
+      ; max_height : int
       ; attributes : Attr.t list
       }
 
     val props
       :  ?autofocus:bool
+      -> ?text_color:Color.t
       -> ?cursor_color:Color.t
       -> ?placeholder:string
       -> ?placeholder_color:Color.t
       -> ?default_value:string
       -> ?on_key_down:(Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t)
+      -> ?max_height:int
       -> Attr.t list
       -> props
 
@@ -246,7 +250,7 @@ module Components : sig
       -> Style.t list
       -> props
 
-    val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
+    val component : (Element.t list * props, Element.t) Bonsai.t
   end
 
   module Expert : sig

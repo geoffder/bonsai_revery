@@ -40,21 +40,25 @@ end
 module Text_area : sig
   type props =
     { autofocus : bool
+    ; text_color : Color.t
     ; cursor_color : Color.t
     ; placeholder : string
     ; placeholder_color : Color.t
     ; default_value : string option
     ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
+    ; max_height : int
     ; attributes : Attributes.t list
     }
 
   val props
     :  ?autofocus:bool
+    -> ?text_color:Color.t
     -> ?cursor_color:Color.t
     -> ?placeholder:string
     -> ?placeholder_color:Color.t
     -> ?default_value:string
     -> ?on_key_down:(Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t)
+    -> ?max_height:int
     -> Attributes.t list
     -> props
 
@@ -155,8 +159,6 @@ module Slider : sig
 end
 
 module ScrollView : sig
-  open Core_kernel
-
   type props =
     { speed : float
     ; styles : Style.t list
@@ -177,7 +179,7 @@ module ScrollView : sig
     -> Style.t list
     -> props
 
-  val component : (Element.t Map.M(Int).t * props, Element.t) Bonsai.t
+  val component : (Element.t list * props, Element.t) Bonsai.t
 end
 
 module Expert : sig

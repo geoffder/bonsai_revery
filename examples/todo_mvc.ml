@@ -415,7 +415,7 @@ let scroll_view_list =
       ~track_color:Theme.dimmed_text_color
       ~thumb_color:(Color.hex "#9D77D1")
       Style.[ flex_direction `Column; flex_grow 1; flex_shrink 1 ] in
-  Bonsai.map todo_list ~f:(fun children -> children, props) >>> ScrollView.component
+  Bonsai.map todo_list ~f:(fun children -> Map.data children, props) >>> ScrollView.component
 
 
 let text_input =
@@ -428,6 +428,7 @@ let text_input =
           | Return when (not (String.is_empty value)) && not event.shift ->
             Event.Many [ inject (Action.Add value); set_value "" ]
           | _ -> Event.no_op)
+        ~max_height:150
         Attr.[ kind Theme.font_info ])
   >>> Text_area.component
 
