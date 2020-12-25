@@ -1409,6 +1409,7 @@ module Text_area = struct
         ; y_offset : float
         ; x_scroll : float
         ; y_scroll : float
+        ; select_start : int option
         }
       [@@deriving equal, sexp]
 
@@ -1422,6 +1423,7 @@ module Text_area = struct
         ; y_offset = 0.
         ; x_scroll = 0.
         ; y_scroll = 0.
+        ; select_start = None
         }
     end
 
@@ -1429,6 +1431,8 @@ module Text_area = struct
       type t =
         | Focus
         | Blur
+        | Select of int
+        | Unselect
         | Text_input of string * int
         | Set_value of string
         | UpdateOffsets
@@ -1446,7 +1450,7 @@ module Text_area = struct
     let styles =
       Style.
         [ cursor `Text
-        ; flex_direction `Row (* ; align_items `FlexStart *)
+        ; flex_direction `Row
         ; align_items `Center
         ; margin_left 10
         ; margin_right 10
@@ -1655,6 +1659,11 @@ module Text_area = struct
       new_text, cursor_position
 
 
+    let remove_between text p1 p2 =
+      let first, last = if p1 > p2 then p2, p1 else p1, p2 in
+      Str.string_before text first ^ Str.string_after text last, first
+
+
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
       let font_info = get_font_info props.attributes in
@@ -1673,29 +1682,52 @@ module Text_area = struct
           let value, cursor_position = insertString value data cursor_position in
           update value cursor_position in
 
+      (* TODO: make nicer *)
       let handle_text_input (event : Node_events.Text_input.t) =
-        let value, cursor_position = insertString value event.text cursor_position in
+        let value', cursor_position' =
+          match model.select_start with
+          | Some pos -> remove_between value pos cursor_position
+          | None -> value, cursor_position in
+        let value, cursor_position = insertString value' event.text cursor_position' in
         update value cursor_position in
 
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
         let event =
           match keyboard_event.key with
           | Left ->
-            let cursor_position =
+            let new_position =
               if keyboard_event.ctrl
               then (
                 let before, _ = getStringParts cursor_position value in
                 cursor_position - chars_to_previous_word_end before )
               else getSafeStringBounds value cursor_position (-1) in
-            inject (Action.Text_input (value, cursor_position))
+            (* TODO: This is repeated in Left and Right. Factor it out into a function
+             * I'll need it in Up and Down as well... *)
+            Event.Many
+              ( update value new_position
+              ::
+              ( if keyboard_event.shift
+              then
+                if Option.is_none model.select_start && new_position <> cursor_position
+                then [ inject (Action.Select cursor_position) ]
+                else []
+              else [ inject Action.Unselect ] ) )
           | Right ->
-            let cursor_position =
+            let new_position =
               if keyboard_event.ctrl
               then (
                 let _, after = getStringParts cursor_position value in
                 cursor_position + chars_to_next_word_end after )
               else getSafeStringBounds value cursor_position 1 in
-            inject (Action.Text_input (value, cursor_position))
+            Event.Many
+              ( update value new_position
+              ::
+              ( if keyboard_event.shift
+              then
+                if Option.is_none model.select_start && new_position <> cursor_position
+                then [ inject (Action.Select cursor_position) ]
+                else []
+              else [ inject Action.Unselect ] ) )
           | Up ->
             let cursor_position =
               vertical_nav ~up:true model.text_node font_info cursor_position value in
@@ -1706,16 +1738,22 @@ module Text_area = struct
             update value cursor_position
           | Delete ->
             let value, cursor_position =
-              if keyboard_event.ctrl
-              then remove_word_after value cursor_position
-              else removeCharacterAfter value cursor_position in
-            inject (Action.Text_input (value, cursor_position))
+              match model.select_start with
+              | Some pos -> remove_between value pos cursor_position
+              | None ->
+                if keyboard_event.ctrl
+                then remove_word_after value cursor_position
+                else removeCharacterAfter value cursor_position in
+            Event.Many [ update value cursor_position; inject Action.Unselect ]
           | Backspace ->
             let value, cursor_position =
-              if keyboard_event.ctrl
-              then remove_word_before value cursor_position
-              else removeCharacterBefore value cursor_position in
-            inject (Action.Text_input (value, cursor_position))
+              match model.select_start with
+              | Some pos -> remove_between value pos cursor_position
+              | None ->
+                if keyboard_event.ctrl
+                then remove_word_before value cursor_position
+                else removeCharacterBefore value cursor_position in
+            Event.Many [ update value cursor_position; inject Action.Unselect ]
           | V when keyboard_event.ctrl -> paste value cursor_position
           | Return when keyboard_event.shift ->
             let value, cursor_position = insertString value "\n" cursor_position in
@@ -1861,6 +1899,8 @@ module Text_area = struct
         | None -> model )
       | Set_text_node node -> { model with text_node = Some node }
       | Set_input_node node -> { model with input_node = Some node }
+      | Select position -> { model with select_start = Some position }
+      | Unselect -> { model with select_start = None }
   end
 
   let component =
@@ -1879,4 +1919,19 @@ module Text_area = struct
                Bool.equal old_timer new_timer && phys_equal old_input new_input)) in
 
     ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component
+
+  (* NOTE: On trying to see what would happen if I get this component to a ScrollView,
+   * I am met with a "node with too large height" exception on the Revery side, so
+   * something about this causes the tree to grow out of control. *)
+  (* let scroll_props =
+   *   ScrollView.props
+   *     ~track_color:Colors.aqua
+   *     ~thumb_color:(Color.hex "#9D77D1")
+   *     Style.[ flex_direction `Column; flex_grow 1; flex_shrink 1 ] in
+   *
+   * Bonsai.Arrow.pipe
+   *   (ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component)
+   *   ~via:(fun _ (_, _, view) -> [ view ], scroll_props)
+   *   ~into:ScrollView.component
+   *   ~finalize:(fun _ (value, set_value, _) scroll_view -> value, set_value, scroll_view) *)
 end
