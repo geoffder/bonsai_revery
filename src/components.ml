@@ -1639,7 +1639,7 @@ module Text_area = struct
         let is_newline = Char.equal '\n' c in
         is_newline, if was_newline && is_newline then acc ^ " \n" else acc ^ String.of_char c in
       let _, hacked = String.fold ~f ~init:(false, "") text in
-      hacked
+      if String.equal (Str.last_chars hacked 1) "\n" then hacked ^ " " else hacked
 
 
     let end_chars = Set.of_list (module Char) [ '\n'; ' '; '/'; '_'; '-'; ','; '.'; ';'; '"' ]
@@ -1696,6 +1696,11 @@ module Text_area = struct
       let selected = String.slice text first last in
       let after = Str.string_after text last in
       before, selected, after
+
+
+    let copy_selected text p1 p2 =
+      let first, last = if p1 > p2 then p2, p1 else p1, p2 in
+      Sdl2.Clipboard.setText (String.slice text first last)
 
 
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
@@ -1788,6 +1793,9 @@ module Text_area = struct
              * Consider select related flag for update, or altering the actions themselves. *)
             Event.Many [ inject Unselect; update value cursor_position ]
           | V when keyboard_event.ctrl -> paste value cursor_position
+          | C when keyboard_event.ctrl ->
+            Option.iter model.select_start ~f:(fun pos -> copy_selected value pos cursor_position);
+            Event.no_op
           | Return when keyboard_event.shift ->
             let value, cursor_position = insertString value "\n" cursor_position in
             update value cursor_position
@@ -1873,21 +1881,27 @@ module Text_area = struct
            * width for ALL rows. *)
           let widths = line_widths font_info margin value in
           ( match Int.of_float ((last_y -. first_y) /. line_height) with
-          | 0 -> [ stripe ~len:(last_x -. first_x) ~h:line_height ~x:first_x ~y:first_y ]
+          | 0 ->
+            [ stripe
+                ~len:(last_x -. first_x)
+                ~h:line_height
+                ~x:(first_x -. model.x_scroll)
+                ~y:(first_y -. model.y_scroll)
+            ]
           | n ->
             stripe
               ~len:(List.nth_exn widths start_line -. first_x)
               ~h:line_height
-              ~x:first_x
-              ~y:first_y
+              ~x:(first_x -. model.x_scroll)
+              ~y:(first_y -. model.y_scroll)
             :: List.foldi
-                 ~init:[ stripe ~len:last_x ~h:line_height ~x:0. ~y:last_y ]
+                 ~init:[ stripe ~len:last_x ~h:line_height ~x:0. ~y:(last_y -. model.y_scroll) ]
                  ~f:(fun i stripes w ->
                    stripe
                      ~len:w
                      ~h:line_height
                      ~x:0.
-                     ~y:(first_y +. (Float.of_int (i + 1) *. line_height))
+                     ~y:(first_y -. model.y_scroll +. (Float.of_int (i + 1) *. line_height))
                    :: stripes)
                  (List.slice widths (start_line + 1) (start_line + n)) )
         | _ -> [] in
