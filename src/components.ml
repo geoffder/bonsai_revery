@@ -1441,6 +1441,8 @@ module Text_area = struct
       [@@deriving sexp_of]
     end
 
+    open Action
+
     module Result = struct
       type t = string * (string -> Event.t) * Element.t
     end
@@ -1527,6 +1529,27 @@ module Text_area = struct
       if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
       then max_x_offset, 0., y_offset +. line_height
       else max_x_offset, x_offset, y_offset
+
+
+    (* NOTE: I'm doing a lot of recalculation vs measure... think about it. *)
+    let line_widths font_info margin text =
+      let measure_width = measure_text_width font_info in
+      let lines = String.split_lines text in
+      List.fold
+        ~init:[]
+        ~f:(fun widths line ->
+          let inner (acc, last_width, ws) word =
+            let ext = acc ^ " " ^ word in
+            let w = measure_width ext in
+            if Float.(w > margin) then word, 0., last_width :: ws else ext, w, ws in
+          match String.split ~on:' ' line with
+          | [] -> widths
+          | [ h ] -> measure_width h :: widths
+          | h :: t ->
+            let l, _, ws = List.fold ~init:(h, 0., widths) ~f:inner t in
+            measure_width l :: ws)
+        lines
+      |> List.rev
 
 
     (* FIXME: There is some glitchyness as scrolling occurs when the container
@@ -1664,6 +1687,14 @@ module Text_area = struct
       Str.string_before text first ^ Str.string_after text last, first
 
 
+    let select_parts text p1 p2 =
+      let first, last = if p1 > p2 then p2, p1 else p1, p2 in
+      let before = Str.string_before text first in
+      let selected = String.slice text first last in
+      let after = Str.string_after text last in
+      before, selected, after
+
+
     let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
       let open Revery.UI.Components.Input in
       let font_info = get_font_info props.attributes in
@@ -1672,23 +1703,34 @@ module Text_area = struct
       let cursor_position = model.cursor_position in
 
       let measure_text_width text = measure_text_width font_info text in
-      let set_value value = inject (Action.Set_value value) in
-      let update value cursor_position = inject (Action.Text_input (value, cursor_position)) in
+      let set_value value = inject (Set_value value) in
+      let update value cursor_position = inject (Text_input (value, cursor_position)) in
+
+      let selection_event shift new_position =
+        if shift
+        then
+          if Option.is_none model.select_start && new_position <> cursor_position
+          then [ inject (Select cursor_position) ]
+          else []
+        else [ inject Unselect ] in
 
       let paste value cursor_position =
+        let value, cursor_position =
+          match model.select_start with
+          | Some pos -> remove_between value pos cursor_position
+          | None -> value, cursor_position in
         match Sdl2.Clipboard.getText () with
         | None -> Event.no_op
         | Some data ->
           let value, cursor_position = insertString value data cursor_position in
-          update value cursor_position in
+          Event.Many [ inject Unselect; update value cursor_position ] in
 
-      (* TODO: make nicer *)
       let handle_text_input (event : Node_events.Text_input.t) =
-        let value', cursor_position' =
+        let value, cursor_position =
           match model.select_start with
           | Some pos -> remove_between value pos cursor_position
           | None -> value, cursor_position in
-        let value, cursor_position = insertString value' event.text cursor_position' in
+        let value, cursor_position = insertString value event.text cursor_position in
         update value cursor_position in
 
       let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
@@ -1701,17 +1743,8 @@ module Text_area = struct
                 let before, _ = getStringParts cursor_position value in
                 cursor_position - chars_to_previous_word_end before )
               else getSafeStringBounds value cursor_position (-1) in
-            (* TODO: This is repeated in Left and Right. Factor it out into a function
-             * I'll need it in Up and Down as well... *)
             Event.Many
-              ( update value new_position
-              ::
-              ( if keyboard_event.shift
-              then
-                if Option.is_none model.select_start && new_position <> cursor_position
-                then [ inject (Action.Select cursor_position) ]
-                else []
-              else [ inject Action.Unselect ] ) )
+              (update value new_position :: selection_event keyboard_event.shift new_position)
           | Right ->
             let new_position =
               if keyboard_event.ctrl
@@ -1720,22 +1753,17 @@ module Text_area = struct
                 cursor_position + chars_to_next_word_end after )
               else getSafeStringBounds value cursor_position 1 in
             Event.Many
-              ( update value new_position
-              ::
-              ( if keyboard_event.shift
-              then
-                if Option.is_none model.select_start && new_position <> cursor_position
-                then [ inject (Action.Select cursor_position) ]
-                else []
-              else [ inject Action.Unselect ] ) )
+              (update value new_position :: selection_event keyboard_event.shift new_position)
           | Up ->
-            let cursor_position =
+            let new_position =
               vertical_nav ~up:true model.text_node font_info cursor_position value in
-            update value cursor_position
+            Event.Many
+              (update value new_position :: selection_event keyboard_event.shift new_position)
           | Down ->
-            let cursor_position =
+            let new_position =
               vertical_nav ~up:false model.text_node font_info cursor_position value in
-            update value cursor_position
+            Event.Many
+              (update value new_position :: selection_event keyboard_event.shift new_position)
           | Delete ->
             let value, cursor_position =
               match model.select_start with
@@ -1744,7 +1772,7 @@ module Text_area = struct
                 if keyboard_event.ctrl
                 then remove_word_after value cursor_position
                 else removeCharacterAfter value cursor_position in
-            Event.Many [ update value cursor_position; inject Action.Unselect ]
+            Event.Many [ inject Unselect; update value cursor_position ]
           | Backspace ->
             let value, cursor_position =
               match model.select_start with
@@ -1753,7 +1781,9 @@ module Text_area = struct
                 if keyboard_event.ctrl
                 then remove_word_before value cursor_position
                 else removeCharacterBefore value cursor_position in
-            Event.Many [ update value cursor_position; inject Action.Unselect ]
+            (* NOTE: Important to unselect first, so select_start can't be above end of text.
+             * Consider select related flag for update, or altering the actions themselves. *)
+            Event.Many [ inject Unselect; update value cursor_position ]
           | V when keyboard_event.ctrl -> paste value cursor_position
           | Return when keyboard_event.shift ->
             let value, cursor_position = insertString value "\n" cursor_position in
@@ -1773,9 +1803,9 @@ module Text_area = struct
           let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
           let x_text_offset = event.mouseX -. Float.of_int scene_offsets.left in
           let y_text_offset = event.mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
-          let cursor_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
+          let new_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
           Option.iter model.input_node ~f:UI.Focus.focus;
-          update value cursor_position
+          Event.Many (update value new_position :: selection_event event.shiftKey new_position)
         | _ -> Event.no_op in
 
       let cursor =
@@ -1805,30 +1835,84 @@ module Text_area = struct
                  ]
              ] in
 
+      let stripe ~len ~h ~x ~y =
+        let position_style =
+          Style.[ position `Absolute; transform [ TranslateX x; TranslateY y ] ] in
+        box
+          Attr.[ style position_style ]
+          [ opacity
+              ~opacity:0.5
+              [ box
+                  Attr.
+                    [ style
+                        Style.
+                          [ width (Int.of_float len)
+                          ; height (Int.of_float h)
+                          ; background_color Colors.aqua
+                          ]
+                    ]
+                  []
+              ]
+          ] in
+
+      let highlights =
+        match model.select_start, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
+        | Some start, Some node ->
+          let first = Int.min cursor_position start in
+          let last = Int.max cursor_position start in
+          let line_height = get_line_height font_info node in
+          let margin = Float.of_int (node#measurements ()).width in
+          let measure = measure_text_dims font_info line_height margin in
+          let _, first_x, first_y = measure (String.sub ~pos:0 ~len:first value) in
+          let _, last_x, last_y = measure (String.sub ~pos:0 ~len:last value) in
+          let start_line = Int.of_float (first_y /. line_height) in
+          (* NOTE: Think about more efficient, clean options. This calculates
+           * width for ALL rows. *)
+          let widths = line_widths font_info margin value in
+          ( match Int.of_float ((last_y -. first_y) /. line_height) with
+          | 0 -> [ stripe ~len:(last_x -. first_x) ~h:line_height ~x:first_x ~y:first_y ]
+          | n ->
+            stripe
+              ~len:(List.nth_exn widths start_line -. first_x)
+              ~h:line_height
+              ~x:first_x
+              ~y:first_y
+            :: List.foldi
+                 ~init:[ stripe ~len:last_x ~h:line_height ~x:0. ~y:last_y ]
+                 ~f:(fun i stripes w ->
+                   stripe
+                     ~len:w
+                     ~h:line_height
+                     ~x:0.
+                     ~y:(first_y +. (Float.of_int (i + 1) *. line_height))
+                   :: stripes)
+                 (List.slice widths (start_line + 1) (start_line + n)) )
+        | _ -> [] in
+
       let attributes =
         Attr.(
           node_ref (fun node ->
               if props.autofocus then UI.Focus.focus node;
-              inject (Action.Set_input_node node))
+              inject (Set_input_node node))
           :: on_mouse_down handle_click
           :: on_key_down handle_key_down
           :: on_text_input handle_text_input
-          :: on_focus (inject Action.Focus)
-          :: on_blur (inject Action.Blur)
+          :: on_focus (inject Focus)
+          :: on_blur (inject Blur)
           :: style Style.(max_height props.max_height :: styles)
           :: props.attributes) in
 
       let view =
         box
           attributes
-          [ box
+          ( box
               Attr.
                 [ style Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
-                ; on_dimensions_changed (fun d -> inject Action.UpdateOffsets)
+                ; on_dimensions_changed (fun d -> inject UpdateOffsets)
                 ]
               [ text
                   Attr.
-                    [ node_ref (fun node -> inject (Action.Set_text_node node))
+                    [ node_ref (fun node -> inject (Set_text_node node))
                     ; style
                         Style.
                           [ color
@@ -1846,25 +1930,25 @@ module Text_area = struct
                     ]
                   (if show_placeholder then props.placeholder else newline_hack value)
               ]
-          ; cursor
-          ] in
+          :: cursor
+          :: highlights ) in
 
       value, set_value, view
 
 
     let apply_action ~inject ~schedule_event ((_, props) : Input.t) (model : Model.t) = function
-      | Action.Focus ->
+      | Focus ->
         Sdl2.TextInput.start ();
         { model with focused = true }
       | Blur ->
         Sdl2.TextInput.stop ();
         { model with focused = false }
       | Text_input (value, cursor_position) ->
-        schedule_event (inject Action.UpdateOffsets);
+        schedule_event (inject UpdateOffsets);
         { model with value = Some value; cursor_position }
       | Set_value value ->
         let cursor_position = min model.cursor_position (String.length value) in
-        schedule_event (inject Action.UpdateOffsets);
+        schedule_event (inject UpdateOffsets);
         { model with value = Some value; cursor_position }
       | UpdateOffsets ->
         let value = Option.value ~default:"" model.value in
