@@ -109,6 +109,7 @@ module Components : sig
       { autofocus : bool
       ; text_color : Color.t
       ; cursor_color : Color.t
+      ; select_color : Color.t
       ; placeholder : string
       ; placeholder_color : Color.t
       ; default_value : string option
@@ -121,6 +122,7 @@ module Components : sig
       :  ?autofocus:bool
       -> ?text_color:Color.t
       -> ?cursor_color:Color.t
+      -> ?select_color:Color.t
       -> ?placeholder:string
       -> ?placeholder_color:Color.t
       -> ?default_value:string

@@ -1361,6 +1361,7 @@ module Text_area = struct
     { autofocus : bool
     ; text_color : (Color.t[@sexp.opaque])
     ; cursor_color : (Color.t[@sexp.opaque])
+    ; select_color : (Color.t[@sexp.opaque])
     ; placeholder : string
     ; placeholder_color : (Color.t[@sexp.opaque])
     ; default_value : string option
@@ -1374,6 +1375,7 @@ module Text_area = struct
       ?(autofocus = false)
       ?(text_color = Colors.black)
       ?(cursor_color = Revery.UI.Components.Input.Styles.defaultCursorColor)
+      ?(select_color = Revery.Colors.blueViolet)
       ?(placeholder = "")
       ?(placeholder_color = Revery.UI.Components.Input.Styles.defaultPlaceholderColor)
       ?default_value
@@ -1384,6 +1386,7 @@ module Text_area = struct
     { autofocus
     ; text_color
     ; cursor_color
+    ; select_color
     ; placeholder
     ; placeholder_color
     ; default_value
@@ -1848,7 +1851,7 @@ module Text_area = struct
                         Style.
                           [ width (Int.of_float len)
                           ; height (Int.of_float h)
-                          ; background_color Colors.aqua
+                          ; background_color props.select_color
                           ]
                     ]
                   []
