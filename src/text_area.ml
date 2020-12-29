@@ -149,12 +149,12 @@ module T = struct
     |> Option.value ~default:default_text_spec
 
 
-  (* FIXME: Need to deal with really long word case, where the container
-   * is overflown by a long unbroken "word". It should be broken up somehow, otherwise
-   * it's possible to extend out of the window. Don't really want to introduce newlines
-   * to the actual value though, should only do at the display stage. Honestly, should
-   * think of doing a PR on the Revery wrapping side to make wrapping like I want an
-   * option. *)
+  (* FIXME: Would like to wrap long words, rather than extend out of the container and
+   * require scrolling, but with how wrapping works in revery, I would need to change a lot
+   * of fundamentals here (might in future, to be more like markdown.re to enable better
+   * selection highlighting, and other inline formatting etc). If I want it bad enough,
+   * consider creating a new wrapping mode in a Revery PR, similar to WrapIgnoreWhiteSpace
+   * but with non-hyphenated word breaking when a single word exceeds the available space. *)
   let measure_text_dims font_info line_height margin text =
     let measure_width = measure_text_width font_info in
     let lines = String.split_lines text in
@@ -162,17 +162,27 @@ module T = struct
       List.fold
         ~init:(0., 0., Int.max 0 (List.length lines - 1))
         ~f:(fun (max_x, x, total_y) line ->
-          let inner (acc, y) word =
+          let inner (acc, overflown, longest, y) word =
             let ext = acc ^ " " ^ word in
-            if Float.(measure_width ext > margin) then word, y + 1 else ext, y in
-          let line_x, line_y =
+            if Float.(measure_width ext > margin)
+            then (
+              let width = measure_width acc in
+              word, Float.(width > margin), Float.max width longest, y + 1 )
+            else ext, overflown, longest, y in
+          let longest, line_x, line_y =
             match String.split ~on:' ' line with
-            | [] -> 0., 0
-            | [ h ] -> measure_width h, 0
+            | [] -> 0., 0., 0
+            | [ h ] ->
+              let w = measure_width (if String.equal h "" then " " else h) in
+              w, w, 0
             | h :: t ->
-              let l, y' = List.fold ~init:(h, 0) ~f:inner t in
-              measure_width l, y' in
-          Float.max max_x line_x, line_x, line_y + total_y)
+              let l, overflown, longest, y' = List.fold ~init:(h, false, 0., 0) ~f:inner t in
+              (* Hacky fix to add back in the space which is dropped by inner. Better
+               * handling of whitespace (likely drawing from Revery wrapping code) would
+               * likely help to avoid this. *)
+              let w = if overflown then measure_width (" " ^ l) else measure_width l in
+              longest, w, y' in
+          Float.max max_x longest, line_x, line_y + total_y)
         lines in
     let y_offset = Float.(of_int y_count * line_height) in
     if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
@@ -201,9 +211,6 @@ module T = struct
     |> List.rev
 
 
-  (* FIXME: There is some glitchyness as scrolling occurs when the container
-   * is growing. Not sure where the origin is, obv probably not here, but need
-   * to investigate. *)
   let vertical_scroll container_height text_height line_height y_offset y_scroll =
     let open Float in
     if text_height > container_height
@@ -445,6 +452,8 @@ module T = struct
         | _ -> Event.no_op in
       Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
+    (* TODO: Mouse drag selection. Can use this body, just need to do so in terms
+     * of mouse capture, rather than just a single mouse down event as it is right now. *)
     let handle_click (event : Node_events.Mouse_button.t) =
       match model.text_node, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
       | Some node, Some parent ->
@@ -610,21 +619,16 @@ module T = struct
       | Some node ->
         let font_info = get_font_info props.attributes in
         let container : UI.Dimensions.t = node#measurements () in
+        let margin = Float.(of_int container.width - measure_text_width font_info "_") in
         let line_height = get_line_height font_info node in
         let _, x_offset, y_offset =
           measure_text_dims
             font_info
             line_height
-            (Float.of_int container.width)
+            margin
             (String.sub ~pos:0 ~len:cursor_position value) in
-        let max_x_offset, _, max_y_offset =
-          measure_text_dims font_info line_height (Float.of_int container.width) value in
-        let x_scroll =
-          horizontal_scroll
-            (Float.of_int container.width -. measure_text_width font_info "_")
-            max_x_offset
-            x_offset
-            model.x_scroll in
+        let max_x_offset, _, max_y_offset = measure_text_dims font_info line_height margin value in
+        let x_scroll = horizontal_scroll margin max_x_offset x_offset model.x_scroll in
         let y_scroll =
           vertical_scroll
             (Float.of_int container.height)
