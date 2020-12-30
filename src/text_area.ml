@@ -85,6 +85,7 @@ module T = struct
       | Text_input of string * int
       | Set_value of string
       | UpdateOffsets
+      | Reposition of int * float * float * float * float
       | Set_text_node of (UI.node[@sexp.opaque])
       | Set_input_node of (UI.node[@sexp.opaque])
     [@@deriving sexp_of]
@@ -154,7 +155,14 @@ module T = struct
    * of fundamentals here (might in future, to be more like markdown.re to enable better
    * selection highlighting, and other inline formatting etc). If I want it bad enough,
    * consider creating a new wrapping mode in a Revery PR, similar to WrapIgnoreWhiteSpace
-   * but with non-hyphenated word breaking when a single word exceeds the available space. *)
+   * but with non-hyphenated word breaking when a single word exceeds the available space.
+   *
+   * NOTE: If edge cases related to overflown lines turn up again, consider trying Wrap mode
+   * again, with zero-width unicode whitespace characters instead of spaces in newline_hack.
+   * Might work, but haven't tested.
+   *
+   * TODO: Try making this a bit more efficient by getting all of the indices of spaces, rather
+   * than allocating all of the substrings with split. *)
   let measure_text_dims font_info line_height margin text =
     let measure_width = measure_text_width font_info in
     let lines = String.split_lines text in
@@ -180,7 +188,8 @@ module T = struct
               (* Hacky fix to add back in the space which is dropped by inner. Better
                * handling of whitespace (likely drawing from Revery wrapping code) would
                * likely help to avoid this. *)
-              let w = if overflown then measure_width (" " ^ l) else measure_width l in
+              (* let w = if overflown then measure_width (" " ^ l) else measure_width l in *)
+              let w = measure_width l in
               longest, w, y' in
           Float.max max_x longest, line_x, line_y + total_y)
         lines in
@@ -285,14 +294,18 @@ module T = struct
     | _ -> start_position
 
 
+  let zero_space = "\xe2\x80\x8b"
+
   (* Add spaces between consecutive newline characters to ensure they are not collapsed/combined by
      Revery text wrapping. *)
   let newline_hack text =
     let f (was_newline, acc) c =
       let is_newline = Char.equal '\n' c in
-      is_newline, if was_newline && is_newline then acc ^ " \n" else acc ^ String.of_char c in
+      ( is_newline
+      , if was_newline && is_newline then acc ^ zero_space ^ "\n" else acc ^ String.of_char c )
+    in
     let _, hacked = String.fold ~f ~init:(false, "") text in
-    if String.equal (Str.last_chars hacked 1) "\n" then hacked ^ " " else hacked
+    if String.equal (Str.last_chars hacked 1) "\n" then hacked ^ zero_space else hacked
 
 
   let end_chars = Set.of_list (module Char) [ '\n'; ' '; '/'; '_'; '-'; ','; '.'; ';'; '"' ]
@@ -457,7 +470,7 @@ module T = struct
       | Some node, Some parent ->
         let container : UI.Dimensions.t = parent#measurements () in
         let line_height = get_line_height font_info node in
-        let margin = Float.(of_int container.width - measure_text_width "_") in
+        let margin = Float.of_int container.width in
         let box_height = Float.of_int container.height in
         let measure = measure_text_dims font_info line_height margin in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
@@ -468,21 +481,33 @@ module T = struct
         let text_height = max_y_offset +. line_height in
 
         let handle_mouse_move
-            (pos, x_scroll, y_scroll) ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t)
+            (pos, x_scroll, y_scroll, last) ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t)
           =
-          let _, x_offset, y_offset = measure (String.sub ~pos:0 ~len:pos value) in
-          let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
-          let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
-          let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
-          let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
-          let new_pos = index_nearest_offset ~measure x_text_offset y_text_offset value in
-          update value new_pos, Some (new_pos, x_scroll, y_scroll) in
+          let now = Time.now () in
+          if Float.(Time.Span.to_ms (Time.diff now last) > 35.)
+          then (
+            (* TODO: In the spirit of making this more efficient, and trying to solve the
+             * freezing on large values issue, I should use a specialized nearest offset
+             * function which uses precomputed offsets of each character. Two arrays or Maps?
+             * Then while moving around, the cursor position simply needs to be looked up.
+             *
+             * Prob not necessary, but such lookup structures could be stored in the model
+             * whenever the value actually changes. *)
+            let _, x_offset, y_offset = measure (String.sub ~pos:0 ~len:pos value) in
+            let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
+            let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
+            let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
+            let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
+            let new_pos = index_nearest_offset ~measure x_text_offset y_text_offset value in
+            let repos = inject (Reposition (new_pos, x_offset, y_offset, x_scroll, y_scroll)) in
+            repos, Some (new_pos, x_scroll, y_scroll, now) )
+          else Event.no_op, Some (pos, x_scroll, y_scroll, last) in
 
         Option.iter model.input_node ~f:UI.Focus.focus;
         mouse_capture
           ~on_mouse_move:handle_mouse_move
           ~on_mouse_up:(fun _ _ -> Event.no_op, None)
-          (new_position, model.x_scroll, model.y_scroll);
+          (new_position, model.x_scroll, model.y_scroll, Time.now ());
         Event.Many
           [ update value new_position
           ; (if shiftKey then inject (Select cursor_position) else inject (Select new_position))
@@ -605,7 +630,7 @@ module T = struct
                             (if show_placeholder then props.placeholder_color else props.text_color)
                         ; justify_content `FlexStart
                         ; align_items `Center
-                        ; text_wrap WrapIgnoreWhitespace
+                        ; text_wrap Wrap
                         ; transform [ TranslateX (-.model.x_scroll); TranslateY (-.model.y_scroll) ]
                         ; min_height (Int.of_float (measure_text_height font_info))
                         ]
@@ -640,7 +665,7 @@ module T = struct
       | Some node ->
         let font_info = get_font_info props.attributes in
         let container : UI.Dimensions.t = node#measurements () in
-        let margin = Float.(of_int container.width - measure_text_width font_info "_") in
+        let margin = Float.(of_int container.width) in
         let line_height = get_line_height font_info node in
         let _, x_offset, y_offset =
           measure_text_dims
@@ -659,6 +684,8 @@ module T = struct
             model.y_scroll in
         { model with x_offset; y_offset; x_scroll; y_scroll }
       | None -> model )
+    | Reposition (cursor_position, x_offset, y_offset, x_scroll, y_scroll) ->
+      { model with cursor_position; x_offset; y_offset; x_scroll; y_scroll }
     | Set_text_node node -> { model with text_node = Some node }
     | Set_input_node node -> { model with input_node = Some node }
     | Select position -> { model with select_start = Some position }
