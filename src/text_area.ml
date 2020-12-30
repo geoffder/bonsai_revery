@@ -391,7 +391,7 @@ module T = struct
         | Some pos -> remove_between value pos cursor_position
         | None -> value, cursor_position in
       let value, cursor_position = insertString value event.text cursor_position in
-      update value cursor_position in
+      Event.Many [ inject Unselect; update value cursor_position ] in
 
     let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
       let event =
@@ -452,20 +452,41 @@ module T = struct
         | _ -> Event.no_op in
       Event.Many [ event; props.on_key_down keyboard_event value set_value ] in
 
-    (* TODO: Mouse drag selection. Can use this body, just need to do so in terms
-     * of mouse capture, rather than just a single mouse down event as it is right now. *)
-    let handle_click (event : Node_events.Mouse_button.t) =
+    let handle_mouse_down ({ shiftKey; mouseX; mouseY; _ } : Node_events.Mouse_button.t) =
       match model.text_node, Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
       | Some node, Some parent ->
         let container : UI.Dimensions.t = parent#measurements () in
         let line_height = get_line_height font_info node in
-        let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
+        let margin = Float.(of_int container.width - measure_text_width "_") in
+        let box_height = Float.of_int container.height in
+        let measure = measure_text_dims font_info line_height margin in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
-        let x_text_offset = event.mouseX -. Float.of_int scene_offsets.left in
-        let y_text_offset = event.mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
+        let x_text_offset = mouseX -. Float.of_int scene_offsets.left in
+        let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
         let new_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
+        let max_x_offset, _, max_y_offset = measure value in
+        let text_height = max_y_offset +. line_height in
+
+        let handle_mouse_move
+            (pos, x_scroll, y_scroll) ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t)
+          =
+          let _, x_offset, y_offset = measure (String.sub ~pos:0 ~len:pos value) in
+          let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
+          let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
+          let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
+          let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
+          let new_pos = index_nearest_offset ~measure x_text_offset y_text_offset value in
+          update value new_pos, Some (new_pos, x_scroll, y_scroll) in
+
         Option.iter model.input_node ~f:UI.Focus.focus;
-        Event.Many (update value new_position :: selection_event event.shiftKey new_position)
+        mouse_capture
+          ~on_mouse_move:handle_mouse_move
+          ~on_mouse_up:(fun _ _ -> Event.no_op, None)
+          (new_position, model.x_scroll, model.y_scroll);
+        Event.Many
+          [ update value new_position
+          ; (if shiftKey then inject (Select cursor_position) else inject (Select new_position))
+          ]
       | _ -> Event.no_op in
 
     let cursor =
@@ -559,7 +580,7 @@ module T = struct
         node_ref (fun node ->
             if props.autofocus then UI.Focus.focus node;
             inject (Set_input_node node))
-        :: on_mouse_down handle_click
+        :: on_mouse_down handle_mouse_down
         :: on_key_down handle_key_down
         :: on_text_input handle_text_input
         :: on_focus (inject Focus)
@@ -641,7 +662,9 @@ module T = struct
     | Set_text_node node -> { model with text_node = Some node }
     | Set_input_node node -> { model with input_node = Some node }
     | Select position -> { model with select_start = Some position }
-    | Unselect -> { model with select_start = None }
+    | Unselect ->
+      Revery_UI.Mouse.releaseCapture ();
+      { model with select_start = None }
 end
 
 let component =
