@@ -199,6 +199,125 @@ module T = struct
     else max_x_offset, x_offset, y_offset
 
 
+  let char_indices char text =
+    let len = String.length text in
+    let rec loop from idxs =
+      if from < len
+      then (
+        match String.index_from text from char with
+        | None -> idxs
+        | Some i -> loop (i + 1) (i :: idxs) )
+      else idxs in
+    match String.index_from text 0 char with
+    | None -> []
+    | Some i -> List.rev (loop (i + 1) [ i ])
+
+
+  let measure_text_dims' font_info line_height margin text =
+    let measure_width = measure_text_width font_info in
+    let lines = String.split_lines text in
+    let max_x_offset, x_offset, y_count =
+      List.fold
+        ~init:(0., 0., Int.max 0 (List.length lines - 1))
+        ~f:(fun (max_x, x, total_y) line ->
+          let inner (row_start, last_space, overflown, longest, y) next_space =
+            let next_width = measure_width (String.slice line row_start next_space) in
+            if Float.(next_width > margin)
+            then (
+              match last_space with
+              | Some last ->
+                let width = measure_width (String.slice line row_start last) in
+                last + 1, None, Float.(width > margin), Float.max width longest, y + 1
+              | None -> next_space + 1, None, true, Float.max next_width longest, y + 1 )
+            else row_start, Some next_space, overflown, longest, y in
+          let longest, line_x, line_y =
+            if String.length line > 0
+            then (
+              match char_indices ' ' line with
+              | [] ->
+                let w = measure_width line in
+                w, w, 0
+              | idxs ->
+                let row_start, _, overflown, longest, y' =
+                  List.fold ~init:(0, None, false, 0., 0) ~f:inner idxs in
+                let w = measure_width (Str.string_after line row_start) in
+                longest, w, y' )
+            else 0., 0., 0 in
+          Float.max max_x longest, line_x, line_y + total_y)
+        lines in
+    let y_offset = Float.(of_int y_count * line_height) in
+    if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
+    then max_x_offset, 0., y_offset +. line_height
+    else max_x_offset, x_offset, y_offset
+
+
+  type row_offsets =
+    { start : int
+    ; y_offset : float
+    ; x_offsets : float list
+    }
+
+  let offset_map font_info line_height margin text =
+    let measure_width = measure_text_width font_info in
+    let f pos (row, row_start, last_space, last_width, offsets, m) c =
+      let width = measure_width (String.slice text row_start pos) in
+      let offsets = width :: offsets in
+      match c with
+      | ' ' ->
+        if Float.(last_width > margin)
+        then
+          ( row + 1
+          , Option.value ~default:pos last_space + 1
+          , None
+          , 0.
+          , []
+          , Map.add_exn
+              m
+              ~key:row
+              ~data:
+                { start = row_start
+                ; y_offset = Float.of_int row *. line_height
+                ; x_offsets = offsets
+                } )
+        else row, row_start, Some pos, width, offsets, m
+      | '\n' ->
+        ( row + 1
+        , pos + 1
+        , None
+        , 0.
+        , []
+        , Map.add_exn
+            m
+            ~key:row
+            ~data:
+              { start = row_start; y_offset = Float.of_int row *. line_height; x_offsets = offsets }
+        )
+      | c -> row, row_start, last_space, width, offsets, m in
+    List.foldi ~init:(0, 0, None, 0., [], Map.empty (module Int)) ~f
+
+
+  let index_nearest_offset' m x_offset y_offset =
+    let x_offset = Float.max 0. x_offset in
+    let rec find_row last_row i =
+      match Map.find m i, last_row with
+      | (Some row as current), Some last ->
+        if Float.(row.y_offset > y_offset)
+        then
+          if Float.(row.y_offset - y_offset < y_offset - last.y_offset) then current else last_row
+        else find_row current (i + 1)
+      | (Some row as current), None -> current
+      | _ -> None in
+    let%map.Option row = find_row None 0 in
+    let rec find_pos i = function
+      | [] -> 0
+      | [ h ] -> i
+      | h0 :: (h1 :: rest as t) ->
+        if Float.(h1 > x_offset)
+        then if Float.(h1 - x_offset < x_offset - h0) then i + 1 else i
+        else find_pos (i + 1) t in
+    find_pos 0 (0. :: row.x_offsets) + row.start
+
+
   (* NOTE: I'm doing a lot of recalculation vs measure... think about it. *)
   let line_widths font_info margin text =
     let measure_width = measure_text_width font_info in
@@ -472,7 +591,7 @@ module T = struct
         let line_height = get_line_height font_info node in
         let margin = Float.of_int container.width in
         let box_height = Float.of_int container.height in
-        let measure = measure_text_dims font_info line_height margin in
+        let measure = measure_text_dims' font_info line_height margin in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
         let x_text_offset = mouseX -. Float.of_int scene_offsets.left in
         let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
