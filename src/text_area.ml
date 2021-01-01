@@ -259,39 +259,20 @@ module T = struct
 
   let offset_map font_info line_height margin text =
     let measure_width = measure_text_width font_info in
+    let add_row m row start x_offsets =
+      Map.add_exn m ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
+    in
     let f pos (row, row_start, last_space, last_width, offsets, m) c =
       let width = measure_width (String.slice text row_start pos) in
       let offsets = width :: offsets in
       match c with
       | ' ' ->
         if Float.(last_width > margin)
-        then
-          ( row + 1
-          , Option.value ~default:pos last_space + 1
-          , None
-          , 0.
-          , []
-          , Map.add_exn
-              m
-              ~key:row
-              ~data:
-                { start = row_start
-                ; y_offset = Float.of_int row *. line_height
-                ; x_offsets = offsets
-                } )
+        then (
+          let next_row_start = Option.value ~default:pos last_space + 1 in
+          row + 1, next_row_start, None, 0., [], add_row m row row_start (List.rev offsets) )
         else row, row_start, Some pos, width, offsets, m
-      | '\n' ->
-        ( row + 1
-        , pos + 1
-        , None
-        , 0.
-        , []
-        , Map.add_exn
-            m
-            ~key:row
-            ~data:
-              { start = row_start; y_offset = Float.of_int row *. line_height; x_offsets = offsets }
-        )
+      | '\n' -> row + 1, pos + 1, None, 0., [], add_row m row row_start (List.rev offsets)
       | c -> row, row_start, last_space, width, offsets, m in
     List.foldi ~init:(0, 0, None, 0., [], Map.empty (module Int)) ~f
 
