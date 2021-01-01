@@ -160,9 +160,9 @@ module T = struct
    * NOTE: If edge cases related to overflown lines turn up again, consider trying Wrap mode
    * again, with zero-width unicode whitespace characters instead of spaces in newline_hack.
    * Might work, but haven't tested.
-   *
-   * TODO: Try making this a bit more efficient by getting all of the indices of spaces, rather
-   * than allocating all of the substrings with split. *)
+   * FIXME: I'm actually doing the Wrap version right now, but leading spaces on newlines
+   * is failure case of which I'm not sure of a work around. Have to switch back to
+   * WrapIgnoreWhitespace and deal with any edge cases there... *)
   let measure_text_dims font_info line_height margin text =
     let measure_width = measure_text_width font_info in
     let lines = String.split_lines text in
@@ -257,24 +257,40 @@ module T = struct
     ; x_offsets : float list
     }
 
+  let row_offsets_to_string { start; y_offset; x_offsets } =
+    let xs = List.to_string ~f:(sprintf "%.2f") x_offsets in
+    sprintf "start = %i; y_offset = %.2f; x_offsets = %s" start y_offset xs
+
+
+  let m_to_string m =
+    Map.fold m ~init:"\n" ~f:(fun ~key ~data acc ->
+        sprintf "%srow %i -> %s\n" acc key (row_offsets_to_string data))
+
+
   let offset_map font_info line_height margin text =
+    let len = String.length text in
     let measure_width = measure_text_width font_info in
     let add_row m row start x_offsets =
       Map.add_exn m ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
     in
-    let f pos (row, row_start, last_space, last_width, offsets, m) c =
+    let f (pos, row, row_start, offsets, m) c =
       let width = measure_width (String.slice text row_start pos) in
-      let offsets = width :: offsets in
+      let next = pos + 1 in
       match c with
-      | ' ' ->
-        if Float.(last_width > margin)
-        then (
-          let next_row_start = Option.value ~default:pos last_space + 1 in
-          row + 1, next_row_start, None, 0., [], add_row m row row_start (List.rev offsets) )
-        else row, row_start, Some pos, width, offsets, m
-      | '\n' -> row + 1, pos + 1, None, 0., [], add_row m row row_start (List.rev offsets)
-      | c -> row, row_start, last_space, width, offsets, m in
-    List.foldi ~init:(0, 0, None, 0., [], Map.empty (module Int)) ~f
+      | ' ' when next < len ->
+        (* Lookahead to next space to see if upcoming word overflows. *)
+        ( match String.index_from text next ' ' with
+        | Some next_space
+          when String.index_from text next '\n'
+               |> Option.value_map ~default:true ~f:(fun next_break -> next_break > next_space)
+               && Float.( > ) (measure_width (String.slice text row_start (next_space - 1))) margin
+          -> next, row + 1, pos, [], add_row m row row_start (List.rev offsets)
+        | _ -> next, row, row_start, width :: offsets, m )
+      | '\n' -> next, row + 1, pos, [], add_row m row row_start (List.rev offsets)
+      | c -> next, row, row_start, width :: offsets, m in
+    let _, row, row_start, offsets, m =
+      String.fold ~init:(1, 0, 0, [], Map.empty (module Int)) ~f text in
+    add_row m row row_start (List.rev offsets)
 
 
   let index_nearest_offset' m x_offset y_offset =
@@ -286,17 +302,18 @@ module T = struct
         then
           if Float.(row.y_offset - y_offset < y_offset - last.y_offset) then current else last_row
         else find_row current (i + 1)
-      | (Some row as current), None -> current
-      | _ -> None in
+      | (Some row as current), None ->
+        if Float.(row.y_offset > y_offset) then current else find_row current (i + 1)
+      | None, Some _ -> last_row
+      | None, None -> None in
     let%map.Option row = find_row None 0 in
-    let rec find_pos i = function
-      | [] -> 0
-      | [ h ] -> i
-      | h0 :: (h1 :: rest as t) ->
-        if Float.(h1 > x_offset)
-        then if Float.(h1 - x_offset < x_offset - h0) then i + 1 else i
-        else find_pos (i + 1) t in
-    find_pos 0 (0. :: row.x_offsets) + row.start
+    let rec find_pos i last_offset = function
+      | [] -> i
+      | h :: t ->
+        if Float.(h > x_offset)
+        then if Float.(h - x_offset < x_offset - last_offset) then i else Int.max 0 (i - 1)
+        else find_pos (i + 1) h t in
+    find_pos 0 0. row.x_offsets + row.start
 
 
   (* NOTE: I'm doing a lot of recalculation vs measure... think about it. *)
@@ -496,7 +513,7 @@ module T = struct
       | None -> Event.no_op
       | Some data ->
         let value, cursor_position = insertString value data cursor_position in
-        Event.Many [ inject Unselect; update value cursor_position ] in
+        update value cursor_position in
 
     let handle_text_input (event : Node_events.Text_input.t) =
       let value, cursor_position =
@@ -504,7 +521,7 @@ module T = struct
         | Some pos -> remove_between value pos cursor_position
         | None -> value, cursor_position in
       let value, cursor_position = insertString value event.text cursor_position in
-      Event.Many [ inject Unselect; update value cursor_position ] in
+      update value cursor_position in
 
     let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
       let event =
@@ -540,7 +557,7 @@ module T = struct
               if keyboard_event.ctrl
               then remove_word_after value cursor_position
               else removeCharacterAfter value cursor_position in
-          Event.Many [ inject Unselect; update value cursor_position ]
+          update value cursor_position
         | Backspace ->
           let value, cursor_position =
             match model.select_start with
@@ -549,14 +566,16 @@ module T = struct
               if keyboard_event.ctrl
               then remove_word_before value cursor_position
               else removeCharacterBefore value cursor_position in
-          (* NOTE: Important to unselect first, so select_start can't be above end of text.
-           * Consider select related flag for update, or altering the actions themselves. *)
-          Event.Many [ inject Unselect; update value cursor_position ]
+          update value cursor_position
         | V when keyboard_event.ctrl -> paste value cursor_position
         | C when keyboard_event.ctrl ->
           Option.iter model.select_start ~f:(fun pos -> copy_selected value pos cursor_position);
           Event.no_op
         | Return when keyboard_event.shift ->
+          let value, cursor_position =
+            match model.select_start with
+            | Some pos -> remove_between value pos cursor_position
+            | None -> value, cursor_position in
           let value, cursor_position = insertString value "\n" cursor_position in
           update value cursor_position
         | Escape ->
@@ -572,13 +591,15 @@ module T = struct
         let line_height = get_line_height font_info node in
         let margin = Float.of_int container.width in
         let box_height = Float.of_int container.height in
-        let measure = measure_text_dims' font_info line_height margin in
+        (* let measure = measure_text_dims' font_info line_height margin in *)
+        let measure = measure_text_dims font_info line_height margin in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
         let x_text_offset = mouseX -. Float.of_int scene_offsets.left in
         let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
         let new_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
         let max_x_offset, _, max_y_offset = measure value in
         let text_height = max_y_offset +. line_height in
+        let offsets = offset_map font_info line_height margin value in
 
         let handle_mouse_move
             (pos, x_scroll, y_scroll, last) ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t)
@@ -586,19 +607,14 @@ module T = struct
           let now = Time.now () in
           if Float.(Time.Span.to_ms (Time.diff now last) > 35.)
           then (
-            (* TODO: In the spirit of making this more efficient, and trying to solve the
-             * freezing on large values issue, I should use a specialized nearest offset
-             * function which uses precomputed offsets of each character. Two arrays or Maps?
-             * Then while moving around, the cursor position simply needs to be looked up.
-             *
-             * Prob not necessary, but such lookup structures could be stored in the model
-             * whenever the value actually changes. *)
             let _, x_offset, y_offset = measure (String.sub ~pos:0 ~len:pos value) in
             let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
             let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
             let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
             let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
-            let new_pos = index_nearest_offset ~measure x_text_offset y_text_offset value in
+            let new_pos =
+              index_nearest_offset' offsets x_text_offset y_text_offset
+              |> Option.value ~default:(String.length value) in
             let repos = inject (Reposition (new_pos, x_offset, y_offset, x_scroll, y_scroll)) in
             repos, Some (new_pos, x_scroll, y_scroll, now) )
           else Event.no_op, Some (pos, x_scroll, y_scroll, last) in
@@ -753,11 +769,21 @@ module T = struct
       { model with focused = false }
     | Text_input (value, cursor_position) ->
       schedule_event (inject UpdateOffsets);
-      { model with value = Some value; cursor_position }
+      let old_value =
+        Option.first_some model.value props.default_value |> Option.value ~default:"" in
+      let select_start =
+        match model.select_start with
+        | Some _ when not (String.equal value old_value) ->
+          Revery_UI.Mouse.releaseCapture ();
+          None
+        | Some _ -> model.select_start
+        | None -> None in
+      { model with value = Some value; cursor_position; select_start }
     | Set_value value ->
+      Revery_UI.Mouse.releaseCapture ();
       let cursor_position = min model.cursor_position (String.length value) in
       schedule_event (inject UpdateOffsets);
-      { model with value = Some value; cursor_position }
+      { model with value = Some value; cursor_position; select_start = None }
     | UpdateOffsets ->
       let value = Option.value ~default:"" model.value in
       let cursor_position = min model.cursor_position (String.length value) in
