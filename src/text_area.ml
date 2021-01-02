@@ -56,6 +56,8 @@ let measure_text_width font_info text =
   dims.width
 
 
+let zero_space = "\xe2\x80\x8b"
+
 module OffsetMap = struct
   module Row = struct
     type t =
@@ -73,6 +75,16 @@ module OffsetMap = struct
     let to_string { start; y_offset; x_offsets } =
       let xs = List.to_string ~f:(sprintf "%.2f") x_offsets in
       sprintf "start = %i; y_offset = %.2f; x_offsets = %s" start y_offset xs
+
+
+    let nearest_index t x_offset =
+      let rec loop i last_offset = function
+        | [] -> i
+        | h :: t ->
+          if Float.(h > x_offset)
+          then if Float.(h - x_offset < x_offset - last_offset) then i + 1 else i
+          else loop (i + 1) h t in
+      loop 0 0. t.x_offsets + t.start
   end
 
   type t = Row.t Map.M(Int).t
@@ -89,7 +101,17 @@ module OffsetMap = struct
       Map.add_exn t ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
     in
     let f (pos, row, row_start, offsets, t) c =
-      let width = measure_width (String.slice text row_start pos) in
+      let pad =
+        if (row_start = 0 || Char.equal text.[row_start - 1] '\n')
+           && Char.equal text.[row_start] ' '
+        then zero_space
+        else "" in
+      (* let pad =
+       *  if not (row_start = 0 || Char.equal text.[row_start - 1] '\n')
+       *   then " "
+       *   else "" in *)
+      (* let pad = "" in *)
+      let width = measure_width (pad ^ String.slice text row_start pos) in
       let next = pos + 1 in
       match c with
       | ' '
@@ -102,14 +124,21 @@ module OffsetMap = struct
                | Some next_space, None -> next_space
                | None, Some next_break -> next_break
                | _ -> len in
-             Float.( > ) (measure_width (String.slice text row_start (lookahead - 1))) margin ->
-        next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
+             Float.( > ) (measure_width (pad ^ String.slice text row_start (lookahead - 1))) margin
+        -> next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
       | '\n' -> next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
       | c -> next, row, row_start, width :: offsets, t in
     let _, row, row_start, offsets, t =
       String.fold ~init:(1, 0, 0, [], Map.empty (module Int)) ~f text in
     add_row t row row_start (List.rev offsets)
 
+
+  (* let w = if overflown then measure_width (" " ^ l) else measure_width l in *)
+
+  (* let w =
+   *   if (not overflown) && String.length l > 0 && Char.equal l.[0] ' '
+   *   then measure_width (zero_space ^ l)
+   *   else measure_width l in *)
 
   let nearest_index (t : t) x_offset y_offset =
     let x_offset = Float.max 0. x_offset in
@@ -124,14 +153,32 @@ module OffsetMap = struct
         if Float.(row.y_offset > y_offset) then current else find_row current (i + 1)
       | None, Some _ -> last_row
       | None, None -> None in
-    let%map.Option row = find_row None 0 in
-    let rec find_pos i last_offset = function
-      | [] -> i
-      | h :: t ->
-        if Float.(h > x_offset)
-        then if Float.(h - x_offset < x_offset - last_offset) then i else Int.max 0 (i - 1)
-        else find_pos (i + 1) h t in
-    find_pos 0 0. row.x_offsets + row.start
+    Option.map (find_row None 0) ~f:(fun row -> Row.nearest_index row x_offset)
+
+
+  let find_index t index =
+    let index = index - 1 in
+    let f i (r : Row.t) =
+      if index < r.start + List.length r.x_offsets
+      then (
+        let x = Option.value ~default:0. (List.nth r.x_offsets (index - r.start)) in
+        Some (i, x, r.y_offset) )
+      else None in
+    Option.value ~default:(0, 0., 0.) (List.find_mapi ~f (Map.data t))
+
+
+  let max_x_offset t =
+    let f ~key:_ ~data:({ x_offsets; _ } : Row.t) m =
+      Float.max m (List.fold ~init:0. ~f:Float.max x_offsets) in
+    Map.fold t ~init:0. ~f
+
+
+  let max_y_offset (t : t) =
+    Option.value_map (Map.max_elt t) ~default:0. ~f:(fun (_, row) -> row.y_offset)
+
+
+  let row_widths (t : t) =
+    List.map (Map.data t) ~f:(fun { x_offsets; _ } -> List.fold ~init:0. ~f:Float.max x_offsets)
 end
 
 module T = struct
@@ -178,7 +225,7 @@ module T = struct
       | Unselect
       | Text_input of string * int
       | Set_value of string
-      | UpdateOffsets
+      | UpdateOffsets of bool
       | Reposition of int * float * float * float * float
       | Set_text_node of (UI.node[@sexp.opaque])
       | Set_input_node of (UI.node[@sexp.opaque])
@@ -230,8 +277,6 @@ module T = struct
     |> Option.value ~default:default_text_spec
 
 
-  let zero_space = "\xe2\x80\x8b"
-
   (* FIXME: Would like to wrap long words, rather than extend out of the container and
    * require scrolling, but with how wrapping works in revery, I would need to change a lot
    * of fundamentals here (might in future, to be more like markdown.re to enable better
@@ -241,7 +286,10 @@ module T = struct
    *
    * NOTE: If edge cases related to overflown lines turn up again, consider trying Wrap mode
    * again, with zero-width unicode whitespace characters instead of spaces in newline_hack.
-   * Might work, but haven't tested. *)
+   * Might work, but haven't tested.
+   *
+   * NOTE: This has been replaced by OffsetMap, but keep around until all the kinks
+   * have been worked out (given that this _pretty much_ works) *)
   let measure_text_dims font_info line_height margin text =
     let measure_width = measure_text_width font_info in
     let lines = String.split_lines text in
@@ -300,65 +348,6 @@ module T = struct
     | Some i -> List.rev (loop (i + 1) [ i ])
 
 
-  let measure_text_dims' font_info line_height margin text =
-    let measure_width = measure_text_width font_info in
-    let lines = String.split_lines text in
-    let max_x_offset, x_offset, y_count =
-      List.fold
-        ~init:(0., 0., Int.max 0 (List.length lines - 1))
-        ~f:(fun (max_x, x, total_y) line ->
-          let inner (row_start, last_space, overflown, longest, y) next_space =
-            let next_width = measure_width (String.slice line row_start next_space) in
-            if Float.(next_width > margin)
-            then (
-              match last_space with
-              | Some last ->
-                let width = measure_width (String.slice line row_start last) in
-                last + 1, None, Float.(width > margin), Float.max width longest, y + 1
-              | None -> next_space + 1, None, true, Float.max next_width longest, y + 1 )
-            else row_start, Some next_space, overflown, longest, y in
-          let longest, line_x, line_y =
-            if String.length line > 0
-            then (
-              match char_indices ' ' line with
-              | [] ->
-                let w = measure_width line in
-                w, w, 0
-              | idxs ->
-                let row_start, _, overflown, longest, y' =
-                  List.fold ~init:(0, None, false, 0., 0) ~f:inner idxs in
-                let w = measure_width (Str.string_after line row_start) in
-                longest, w, y' )
-            else 0., 0., 0 in
-          Float.max max_x longest, line_x, line_y + total_y)
-        lines in
-    let y_offset = Float.(of_int y_count * line_height) in
-    if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
-    then max_x_offset, 0., y_offset +. line_height
-    else max_x_offset, x_offset, y_offset
-
-
-  (* NOTE: I'm doing a lot of recalculation vs measure... think about it. *)
-  let line_widths font_info margin text =
-    let measure_width = measure_text_width font_info in
-    let lines = String.split_lines text in
-    List.fold
-      ~init:[]
-      ~f:(fun widths line ->
-        let inner (acc, last_width, ws) word =
-          let ext = acc ^ " " ^ word in
-          let w = measure_width ext in
-          if Float.(w > margin) then word, 0., last_width :: ws else ext, w, ws in
-        match String.split ~on:' ' line with
-        | [] -> widths
-        | [ h ] -> measure_width h :: widths
-        | h :: t ->
-          let l, _, ws = List.fold ~init:(h, 0., widths) ~f:inner t in
-          measure_width l :: ws)
-      lines
-    |> List.rev
-
-
   let vertical_scroll container_height text_height line_height y_offset y_scroll =
     let open Float in
     if text_height > container_height
@@ -389,62 +378,41 @@ module T = struct
     else 0.
 
 
-  let index_nearest_offset ~measure x_offset y_offset text =
-    let length = String.length text in
-    (* necessary? harmful? *)
-    let x_offset = Float.max 0. x_offset in
-    let rec find_row_start ~last_y ~last_start i =
-      if i > length
-      then last_y, last_start
-      else (
-        let _, _, height = measure (String.sub text 0 i) in
-        if Float.(height > y_offset)
-        then (
-          let start = if Float.(height - y_offset < y_offset - last_y) then i else last_start in
-          last_y, start )
-        else (
-          let last_y, last_start =
-            if Float.(height > last_y) then height, i else last_y, last_start in
-          find_row_start ~last_y ~last_start (i + 1) ) ) in
-    let row_y, row_i = find_row_start ~last_y:0. ~last_start:0 1 in
-    let rec loop ~last_x i =
-      if i > length
-      then length
-      else (
-        let _, width, height = measure (String.sub text 0 i) in
-        if Float.(height > row_y)
-        then i - 1 (* last char of searched row *)
-        else if Float.(width > x_offset)
-        then if Float.(width - x_offset < x_offset - last_x) then i else i - 1
-        else loop ~last_x:width (i + 1) ) in
-    loop ~last_x:0. row_i
-
-
-  let vertical_nav ~up text_node font_info start_position text =
-    match text_node, Option.bind text_node ~f:(fun n -> n#getParent ()) with
-    | Some node, Some parent ->
-      let container : UI.Dimensions.t = parent#measurements () in
-      let line_height = get_line_height font_info node in
-      let measure = measure_text_dims font_info line_height (Float.of_int container.width) in
-      let _, target_x, start_y = measure (String.sub text 0 start_position) in
-      let target_y = start_y +. if up then -.line_height else line_height in
-      let cursor_position = index_nearest_offset ~measure target_x target_y text in
-      cursor_position
-    | _ -> start_position
+  let vertical_nav ~up (m : OffsetMap.t) start_position =
+    let row, target_x, _ = OffsetMap.find_index m start_position in
+    let target_row = if up then row - 1 else row + 1 in
+    Option.value_map (Map.find m target_row) ~default:start_position ~f:(fun row ->
+        OffsetMap.Row.nearest_index row target_x)
 
 
   (* Add spaces between consecutive newline characters to ensure they are not collapsed/combined by
-     Revery text wrapping. *)
+     Revery text wrapping.
+   *
+   * TODO/FIXME: I've got an idea of how to make this more comprehensive and efficient.
+   * If I use the offset map, I can target the row starts and check if they are newlines
+   * or spaces, then add in the zero_space characters as needed. *)
   let newline_hack text =
     let f (was_newline, acc) c =
       let is_newline = Char.equal '\n' c in
       let s = String.of_char c in
       ( is_newline
       , if was_newline && (is_newline || Char.equal c ' ') then acc ^ zero_space ^ s else acc ^ s )
-      (* is_newline, if was_newline && is_newline then acc ^ zero_space ^ s else acc ^ s *) in
+    in
     let _, hacked = String.fold ~f ~init:(false, "") text in
-    if String.equal (Str.last_chars hacked 1) "\n" then hacked ^ zero_space else hacked
+    (if String.equal (Str.first_chars hacked 1) " " then zero_space else "")
+    ^ hacked
+    ^ if String.equal (Str.last_chars hacked 1) "\n" then zero_space else ""
 
+
+  (* NOTE: for ignore whitspace wrapping (above is for Wrap). Trying to make it
+   * work without plain wrap again.... *)
+  (* let newline_hack text =
+   *   let f (was_newline, acc) c =
+   *     let is_newline = Char.equal '\n' c in
+   *     let s = String.of_char c in
+   *     is_newline, if was_newline && is_newline then acc ^ zero_space ^ s else acc ^ s in
+   *   let _, hacked = String.fold ~f ~init:(false, "") text in
+   *   hacked ^ if String.equal (Str.last_chars hacked 1) "\n" then zero_space else "" *)
 
   let end_chars = Set.of_list (module Char) [ '\n'; ' '; '/'; '_'; '-'; ','; '.'; ';'; '"' ]
 
@@ -564,11 +532,10 @@ module T = struct
             else getSafeStringBounds value cursor_position 1 in
           Event.Many (update value new_position :: selection_event keyboard_event.shift new_position)
         | Up ->
-          let new_position = vertical_nav ~up:true model.text_node font_info cursor_position value in
+          let new_position = vertical_nav ~up:true model.offsets cursor_position in
           Event.Many (update value new_position :: selection_event keyboard_event.shift new_position)
         | Down ->
-          let new_position =
-            vertical_nav ~up:false model.text_node font_info cursor_position value in
+          let new_position = vertical_nav ~up:false model.offsets cursor_position in
           Event.Many (update value new_position :: selection_event keyboard_event.shift new_position)
         | Delete ->
           let value, cursor_position =
@@ -612,29 +579,29 @@ module T = struct
         let line_height = get_line_height font_info node in
         let margin = Float.of_int container.width in
         let box_height = Float.of_int container.height in
-        (* let measure = measure_text_dims' font_info line_height margin in *)
-        let measure = measure_text_dims font_info line_height margin in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
         let x_text_offset = mouseX -. Float.of_int scene_offsets.left in
         let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
-        let new_position = index_nearest_offset ~measure x_text_offset y_text_offset value in
-        let max_x_offset, _, max_y_offset = measure value in
+        let new_position =
+          OffsetMap.nearest_index model.offsets x_text_offset y_text_offset
+          |> Option.value ~default:(String.length value) in
+        let max_x_offset = OffsetMap.max_x_offset model.offsets in
+        let max_y_offset = OffsetMap.max_y_offset model.offsets in
         let text_height = max_y_offset +. line_height in
-        let offsets = OffsetMap.make font_info line_height margin value in
 
         let handle_mouse_move
             (pos, x_scroll, y_scroll, last) ({ mouseX; mouseY; _ } : Node_events.Mouse_move.t)
           =
           let now = Time.now () in
-          if Float.(Time.Span.to_ms (Time.diff now last) > 35.)
+          if Float.(Time.Span.to_ms (Time.diff now last) > 16.)
           then (
-            let _, x_offset, y_offset = measure (String.sub ~pos:0 ~len:pos value) in
+            let _, x_offset, y_offset = OffsetMap.find_index model.offsets pos in
             let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
             let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
             let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
             let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
             let new_pos =
-              OffsetMap.nearest_index offsets x_text_offset y_text_offset
+              OffsetMap.nearest_index model.offsets x_text_offset y_text_offset
               |> Option.value ~default:(String.length value) in
             let repos = inject (Reposition (new_pos, x_offset, y_offset, x_scroll, y_scroll)) in
             repos, Some (new_pos, x_scroll, y_scroll, now) )
@@ -703,14 +670,9 @@ module T = struct
         let first = Int.min cursor_position start in
         let last = Int.max cursor_position start in
         let line_height = get_line_height font_info node in
-        let margin = Float.of_int (node#measurements ()).width in
-        let measure = measure_text_dims font_info line_height margin in
-        let _, first_x, first_y = measure (String.sub ~pos:0 ~len:first value) in
-        let _, last_x, last_y = measure (String.sub ~pos:0 ~len:last value) in
-        let start_line = Int.of_float (first_y /. line_height) in
-        (* NOTE: Think about more efficient, clean options. This calculates
-         * width for ALL rows. *)
-        let widths = line_widths font_info margin value in
+        let start_line, first_x, first_y = OffsetMap.find_index model.offsets first in
+        let _, last_x, last_y = OffsetMap.find_index model.offsets last in
+        let widths = OffsetMap.row_widths model.offsets in
         ( match Int.of_float ((last_y -. first_y) /. line_height) with
         | 0 ->
           [ stripe
@@ -756,7 +718,7 @@ module T = struct
         ( box
             Attr.
               [ style Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
-              ; on_dimensions_changed (fun d -> inject UpdateOffsets)
+              ; on_dimensions_changed (fun d -> inject (UpdateOffsets false))
               ]
             [ text
                 Attr.
@@ -767,7 +729,7 @@ module T = struct
                             (if show_placeholder then props.placeholder_color else props.text_color)
                         ; justify_content `FlexStart
                         ; align_items `Center
-                        ; text_wrap Wrap
+                        ; text_wrap WrapIgnoreWhitespace
                         ; transform [ TranslateX (-.model.x_scroll); TranslateY (-.model.y_scroll) ]
                         ; min_height (Int.of_float (measure_text_height font_info))
                         ]
@@ -789,47 +751,46 @@ module T = struct
       Sdl2.TextInput.stop ();
       { model with focused = false }
     | Text_input (value, cursor_position) ->
-      schedule_event (inject UpdateOffsets);
       let old_value =
         Option.first_some model.value props.default_value |> Option.value ~default:"" in
+      let value_changed = not (String.equal value old_value) in
       let select_start =
         match model.select_start with
-        | Some _ when not (String.equal value old_value) ->
+        | Some _ when value_changed ->
           Revery_UI.Mouse.releaseCapture ();
           None
         | Some _ -> model.select_start
         | None -> None in
+      schedule_event (inject (UpdateOffsets true));
       { model with value = Some value; cursor_position; select_start }
     | Set_value value ->
       Revery_UI.Mouse.releaseCapture ();
       let cursor_position = min model.cursor_position (String.length value) in
-      schedule_event (inject UpdateOffsets);
+      schedule_event (inject (UpdateOffsets true));
       { model with value = Some value; cursor_position; select_start = None }
-    | UpdateOffsets ->
-      let value = Option.value ~default:"" model.value in
-      let cursor_position = min model.cursor_position (String.length value) in
+    | UpdateOffsets value_changed ->
       ( match Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
       | Some node ->
+        let value = Option.value ~default:"" model.value in
+        let cursor_position = min model.cursor_position (String.length value) in
         let font_info = get_font_info props.attributes in
         let container : UI.Dimensions.t = node#measurements () in
         let margin = Float.(of_int container.width) in
         let line_height = get_line_height font_info node in
-        let _, x_offset, y_offset =
-          measure_text_dims
-            font_info
-            line_height
-            margin
-            (String.sub ~pos:0 ~len:cursor_position value) in
-        let max_x_offset, _, max_y_offset = measure_text_dims font_info line_height margin value in
-        let x_scroll = horizontal_scroll margin max_x_offset x_offset model.x_scroll in
+        let offsets =
+          if value_changed then OffsetMap.make font_info line_height margin value else model.offsets
+        in
+        let _, x_offset, y_offset = OffsetMap.find_index offsets cursor_position in
+        let x_scroll =
+          horizontal_scroll margin (OffsetMap.max_x_offset offsets) x_offset model.x_scroll in
         let y_scroll =
           vertical_scroll
             (Float.of_int container.height)
-            (max_y_offset +. line_height)
+            (OffsetMap.max_y_offset offsets +. line_height)
             line_height
             y_offset
             model.y_scroll in
-        { model with x_offset; y_offset; x_scroll; y_scroll }
+        { model with x_offset; y_offset; x_scroll; y_scroll; offsets }
       | None -> model )
     | Reposition (cursor_position, x_offset, y_offset, x_scroll, y_scroll) ->
       { model with cursor_position; x_offset; y_offset; x_scroll; y_scroll }
