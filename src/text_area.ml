@@ -459,7 +459,11 @@ module T = struct
           | None -> model.offsets ) in
       let _, x_offset, y_offset = OffsetMap.find_position offsets cursor_position in
       let x_scroll =
-        horizontal_scroll margin (OffsetMap.max_x_offset offsets) x_offset model.x_scroll in
+        horizontal_scroll
+          (margin -. measure_text_width font_info "_")
+          (OffsetMap.max_x_offset offsets)
+          x_offset
+          model.x_scroll in
       let y_scroll =
         vertical_scroll
           (Float.of_int container.height)
@@ -577,7 +581,7 @@ module T = struct
         let margin = Float.of_int container.width in
         let box_height = Float.of_int container.height in
         let scene_offsets = (node#getSceneOffsets () : UI.Offset.t) in
-        let x_text_offset = mouseX -. Float.of_int scene_offsets.left in
+        let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. model.x_scroll in
         let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. model.y_scroll in
         let new_position =
           OffsetMap.nearest_position model.offsets x_text_offset y_text_offset
@@ -593,7 +597,9 @@ module T = struct
           if Float.(Time.Span.to_ms (Time.diff now last) > 16.)
           then (
             let _, x_offset, y_offset = OffsetMap.find_position model.offsets pos in
-            let x_scroll = horizontal_scroll margin max_x_offset x_offset x_scroll in
+            let x_scroll =
+              horizontal_scroll (margin -. measure_text_width "_") max_x_offset x_offset x_scroll
+            in
             let y_scroll = vertical_scroll box_height text_height line_height y_offset y_scroll in
             let x_text_offset = mouseX -. Float.of_int scene_offsets.left +. x_scroll in
             let y_text_offset = mouseY -. Float.of_int scene_offsets.top +. y_scroll in
