@@ -74,6 +74,24 @@ let next_non_whitespace str from =
   String.lfindi ~pos:from ~f:(fun _ c -> not (is_space c || is_newline c)) str
 
 
+let first_diff old fresh =
+  let old_len = String.length old in
+  let fresh_len = String.length fresh in
+  let min_len = Int.min old_len fresh_len in
+  let index = ref None in
+  let i = ref 0 in
+  while !i < min_len do
+    if not (Char.equal old.[!i] fresh.[!i])
+    then (
+      index := Some !i;
+      i := min_len )
+    else incr i
+  done;
+  match !index with
+  | None -> if old_len = fresh_len then None else Some min_len
+  | Some _ as idx -> idx
+
+
 module OffsetMap = struct
   module Row = struct
     type t =
@@ -110,15 +128,16 @@ module OffsetMap = struct
         sprintf "%srow %i -> %s\n" acc key (Row.to_string data))
 
 
-  (* TODO: refactor OffsetMap creation such that a position in text can be specified
-   * from which the update will occur. From the beginning of the containing row to
-   * the end of the text will have to be updated, but it will will represent large
-   * computational savings *)
-
-  let make font_info line_height margin text =
+  (* TODO: Clean this up to make it more clear, I did not originally intend to have
+   * to use from_row and from_pos in here in this way while still having to use
+   * string after. At the very least the naming could be better, possibly less shadowing. *)
+  let make ?(from_row = 0) ?(from_pos = 0) font_info line_height margin text =
+    let text = Str.string_after text from_pos in
     let len = String.length text in
     let measure_width = measure_text_width font_info in
     let add_row (t : t) row start x_offsets =
+      let row = from_row + row in
+      let start = from_pos + start in
       Map.add_exn t ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
     in
     let f (pos, row, row_start, offsets, t) c =
@@ -148,6 +167,24 @@ module OffsetMap = struct
     let _, row, row_start, offsets, t =
       String.fold ~init:(1, 0, 0, [], Map.empty (module Int)) ~f text in
     add_row t row row_start (List.rev offsets)
+
+
+  let row_start_of_index t index =
+    let index = index - 1 in
+    let n_rows = Map.length t in
+    let f i ({ start; x_offsets; _ } : Row.t) =
+      if i < n_rows - 1
+      then if index < start + List.length x_offsets then Some (i, start) else None
+      else Some (i, start) in
+    List.find_mapi ~f (Map.data t)
+
+
+  let update ~old ~from font_info line_height margin text =
+    let i, start = Option.value ~default:(0, 0) (row_start_of_index old from) in
+    let fresh = make ~from_row:i ~from_pos:start font_info line_height margin text in
+    match Map.append ~lower_part:(Map.filter_keys old ~f:(( > ) i)) ~upper_part:fresh with
+    | `Ok updated -> updated
+    | _ -> failwith "OffsetMap update failure (overlapping keys)."
 
 
   let nearest_index (t : t) x_offset y_offset =
@@ -235,7 +272,7 @@ module T = struct
       | Unselect
       | Text_input of string * int
       | Set_value of string
-      | UpdateOffsets of bool
+      | UpdateOffsets
       | Reposition of int * float * float * float * float
       | Set_text_node of (UI.node[@sexp.opaque])
       | Set_input_node of (UI.node[@sexp.opaque])
@@ -405,12 +442,44 @@ module T = struct
     Sdl2.Clipboard.setText (String.slice text first last)
 
 
+  let update_offsets ?new_value ?new_cursor (model : Model.t) font_info =
+    match Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
+    | Some node ->
+      let value = Option.value ~default:"" model.value in
+      let cursor_position =
+        min
+          (Option.value ~default:model.cursor_position new_cursor)
+          (String.length (Option.value ~default:value new_value)) in
+      let container : UI.Dimensions.t = node#measurements () in
+      let margin = Float.(of_int container.width) in
+      let line_height = get_line_height font_info node in
+      let offsets =
+        match new_value with
+        | None -> OffsetMap.make font_info line_height margin value
+        | Some v ->
+          ( match first_diff value v with
+          | Some from -> OffsetMap.update ~old:model.offsets ~from font_info line_height margin v
+          | None -> model.offsets ) in
+      let _, x_offset, y_offset = OffsetMap.find_index offsets cursor_position in
+      let x_scroll =
+        horizontal_scroll margin (OffsetMap.max_x_offset offsets) x_offset model.x_scroll in
+      let y_scroll =
+        vertical_scroll
+          (Float.of_int container.height)
+          (OffsetMap.max_y_offset offsets +. line_height)
+          line_height
+          y_offset
+          model.y_scroll in
+      { model with x_offset; y_offset; x_scroll; y_scroll; offsets }
+    | None -> model
+
+
   let compute ~inject ((cursor_on, props) : Input.t) (model : Model.t) =
     let open Revery.UI.Components.Input in
     let font_info = get_font_info props.attributes in
     let value = Option.first_some model.value props.default_value |> Option.value ~default:"" in
     let show_placeholder = String.equal value "" in
-    let cursor_position = model.cursor_position in
+    let cursor_position = min model.cursor_position (String.length value) in
 
     let measure_text_width text = measure_text_width font_info text in
     let set_value value = inject (Set_value value) in
@@ -537,11 +606,13 @@ module T = struct
             let repos = inject (Reposition (new_pos, x_offset, y_offset, x_scroll, y_scroll)) in
             repos, Some (new_pos, x_scroll, y_scroll, now) )
           else Event.no_op, Some (pos, x_scroll, y_scroll, last) in
+        let handle_mouse_up (pos, _, _, _) _ =
+          (if pos = new_position then inject Unselect else Event.no_op), None in
 
         Option.iter model.input_node ~f:UI.Focus.focus;
         mouse_capture
           ~on_mouse_move:handle_mouse_move
-          ~on_mouse_up:(fun _ _ -> Event.no_op, None)
+          ~on_mouse_up:handle_mouse_up
           (new_position, model.x_scroll, model.y_scroll, Time.now ());
         Event.Many
           [ update value new_position
@@ -649,7 +720,7 @@ module T = struct
         ( box
             Attr.
               [ style Style.[ flex_grow 1; margin_right (Int.of_float @@ measure_text_width "_") ]
-              ; on_dimensions_changed (fun d -> inject (UpdateOffsets false))
+              ; on_dimensions_changed (fun d -> inject UpdateOffsets)
               ]
             [ text
                 Attr.
@@ -681,48 +752,26 @@ module T = struct
     | Blur ->
       Sdl2.TextInput.stop ();
       { model with focused = false }
-    | Text_input (value, cursor_position) ->
+    | Text_input (new_value, new_cursor) ->
       let old_value =
         Option.first_some model.value props.default_value |> Option.value ~default:"" in
-      let value_changed = not (String.equal value old_value) in
       let select_start =
         match model.select_start with
-        | Some _ when value_changed ->
+        | Some _ when not (String.equal new_value old_value) ->
           Revery_UI.Mouse.releaseCapture ();
           None
         | Some _ -> model.select_start
         | None -> None in
-      schedule_event (inject (UpdateOffsets true));
-      { model with value = Some value; cursor_position; select_start }
-    | Set_value value ->
+      { (update_offsets model (get_font_info props.attributes) ~new_value ~new_cursor) with
+        value = Some new_value
+      ; select_start
+      }
+    | Set_value new_value ->
       Revery_UI.Mouse.releaseCapture ();
-      let cursor_position = min model.cursor_position (String.length value) in
-      schedule_event (inject (UpdateOffsets true));
-      { model with value = Some value; cursor_position; select_start = None }
-    | UpdateOffsets value_changed ->
-      ( match Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
-      | Some node ->
-        let value = Option.value ~default:"" model.value in
-        let cursor_position = min model.cursor_position (String.length value) in
-        let font_info = get_font_info props.attributes in
-        let container : UI.Dimensions.t = node#measurements () in
-        let margin = Float.(of_int container.width) in
-        let line_height = get_line_height font_info node in
-        let offsets =
-          if value_changed then OffsetMap.make font_info line_height margin value else model.offsets
-        in
-        let _, x_offset, y_offset = OffsetMap.find_index offsets cursor_position in
-        let x_scroll =
-          horizontal_scroll margin (OffsetMap.max_x_offset offsets) x_offset model.x_scroll in
-        let y_scroll =
-          vertical_scroll
-            (Float.of_int container.height)
-            (OffsetMap.max_y_offset offsets +. line_height)
-            line_height
-            y_offset
-            model.y_scroll in
-        { model with x_offset; y_offset; x_scroll; y_scroll; offsets }
-      | None -> model )
+      let new_cursor = min model.cursor_position (String.length new_value) in
+      let model = update_offsets model (get_font_info props.attributes) ~new_value ~new_cursor in
+      { model with value = Some new_value; select_start = None }
+    | UpdateOffsets -> update_offsets model (get_font_info props.attributes)
     | Reposition (cursor_position, x_offset, y_offset, x_scroll, y_scroll) ->
       { model with cursor_position; x_offset; y_offset; x_scroll; y_scroll }
     | Set_text_node node -> { model with text_node = Some node }
