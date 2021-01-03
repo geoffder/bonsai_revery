@@ -4,6 +4,16 @@ open Bonsai.Infix
 open Components
 module Attr = Attributes
 
+(* FIXME: Would like to wrap long words, rather than extend out of the container and
+ * require scrolling, but with how wrapping works in revery, I would need to change a lot
+ * of fundamentals here (might in future, to be more like markdown.re to enable better
+ * selection highlighting, and other inline formatting etc). If I want it bad enough,
+ * consider creating a new wrapping mode in a Revery PR, similar to WrapIgnoreWhiteSpace
+ * but with non-hyphenated word breaking when a single word exceeds the available space.
+ *
+ * Possible workaround might be to mark row beginnings in OffsetMap accordingly, then
+ * use newline_hack to insert the \n, haven't considered enough yet though. *)
+
 type props =
   { autofocus : bool
   ; text_color : Color.t
@@ -56,7 +66,13 @@ let measure_text_width font_info text =
   dims.width
 
 
+let is_space = Char.equal ' '
+let is_newline = Char.equal '\n'
 let zero_space = "\xe2\x80\x8b"
+
+let next_non_whitespace str from =
+  String.lfindi ~pos:from ~f:(fun _ c -> not (is_space c || is_newline c)) str
+
 
 module OffsetMap = struct
   module Row = struct
@@ -94,6 +110,11 @@ module OffsetMap = struct
         sprintf "%srow %i -> %s\n" acc key (Row.to_string data))
 
 
+  (* TODO: refactor OffsetMap creation such that a position in text can be specified
+   * from which the update will occur. From the beginning of the containing row to
+   * the end of the text will have to be updated, but it will will represent large
+   * computational savings *)
+
   let make font_info line_height margin text =
     let len = String.length text in
     let measure_width = measure_text_width font_info in
@@ -101,16 +122,8 @@ module OffsetMap = struct
       Map.add_exn t ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
     in
     let f (pos, row, row_start, offsets, t) c =
-      let pad =
-        if (row_start = 0 || Char.equal text.[row_start - 1] '\n')
-           && Char.equal text.[row_start] ' '
-        then zero_space
-        else "" in
-      (* let pad =
-       *  if not (row_start = 0 || Char.equal text.[row_start - 1] '\n')
-       *   then " "
-       *   else "" in *)
-      (* let pad = "" in *)
+      (* zero_width character used in newline_hack to prevent leading space collapse *)
+      let pad = if is_space text.[row_start] then zero_space else "" in
       let width = measure_width (pad ^ String.slice text row_start pos) in
       let next = pos + 1 in
       match c with
@@ -118,27 +131,24 @@ module OffsetMap = struct
       (* Lookahead to next whitespace to see if upcoming word overflows. *)
         when next < len
              &&
+             let word_start = next_non_whitespace text next in
              let lookahead =
-               match String.index_from text next ' ', String.index_from text next ' ' with
+               match
+                 ( Option.bind word_start ~f:(fun n -> String.index_from text n ' ')
+                 , String.index_from text next '\n' )
+               with
                | Some next_space, Some next_break -> Int.min next_space next_break
                | Some next_space, None -> next_space
                | None, Some next_break -> next_break
                | _ -> len in
-             Float.( > ) (measure_width (pad ^ String.slice text row_start (lookahead - 1))) margin
-        -> next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
+             Float.( > ) (measure_width (pad ^ String.slice text row_start lookahead)) margin ->
+        next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
       | '\n' -> next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
       | c -> next, row, row_start, width :: offsets, t in
     let _, row, row_start, offsets, t =
       String.fold ~init:(1, 0, 0, [], Map.empty (module Int)) ~f text in
     add_row t row row_start (List.rev offsets)
 
-
-  (* let w = if overflown then measure_width (" " ^ l) else measure_width l in *)
-
-  (* let w =
-   *   if (not overflown) && String.length l > 0 && Char.equal l.[0] ' '
-   *   then measure_width (zero_space ^ l)
-   *   else measure_width l in *)
 
   let nearest_index (t : t) x_offset y_offset =
     let x_offset = Float.max 0. x_offset in
@@ -277,77 +287,6 @@ module T = struct
     |> Option.value ~default:default_text_spec
 
 
-  (* FIXME: Would like to wrap long words, rather than extend out of the container and
-   * require scrolling, but with how wrapping works in revery, I would need to change a lot
-   * of fundamentals here (might in future, to be more like markdown.re to enable better
-   * selection highlighting, and other inline formatting etc). If I want it bad enough,
-   * consider creating a new wrapping mode in a Revery PR, similar to WrapIgnoreWhiteSpace
-   * but with non-hyphenated word breaking when a single word exceeds the available space.
-   *
-   * NOTE: If edge cases related to overflown lines turn up again, consider trying Wrap mode
-   * again, with zero-width unicode whitespace characters instead of spaces in newline_hack.
-   * Might work, but haven't tested.
-   *
-   * NOTE: This has been replaced by OffsetMap, but keep around until all the kinks
-   * have been worked out (given that this _pretty much_ works) *)
-  let measure_text_dims font_info line_height margin text =
-    let measure_width = measure_text_width font_info in
-    let lines = String.split_lines text in
-    let max_x_offset, x_offset, y_count =
-      List.fold
-        ~init:(0., 0., Int.max 0 (List.length lines - 1))
-        ~f:(fun (max_x, x, total_y) line ->
-          let inner (acc, overflown, longest, y) word =
-            let ext = acc ^ " " ^ word in
-            if Float.(measure_width ext > margin)
-            then (
-              let width = measure_width acc in
-              word, Float.(width > margin), Float.max width longest, y + 1 )
-            else ext, overflown, longest, y in
-          let longest, line_x, line_y =
-            match String.split ~on:' ' line with
-            | [] -> 0., 0., 0
-            | [ h ] ->
-              let w = measure_width (if String.equal h "" then " " else h) in
-              w, w, 0
-            | h :: t ->
-              let l, overflown, longest, y' = List.fold ~init:(h, false, 0., 0) ~f:inner t in
-
-              (* Hacky fix to add back in the space which is dropped by inner. Better
-               * handling of whitespace (likely drawing from Revery wrapping code) would
-               * likely help to avoid this. Comment out if not in WrapIgnoreWhitespace *)
-              (* let w = if overflown then measure_width (" " ^ l) else measure_width l in *)
-
-              (* Hacky fix to calculate correct width of leading space, assuming the use
-               * of the zero_width insertion by newline_hack. *)
-              let w =
-                if (not overflown) && String.length l > 0 && Char.equal l.[0] ' '
-                then measure_width (zero_space ^ l)
-                else measure_width l in
-              (* let w = measure_width l in *)
-              longest, w, y' in
-          Float.max max_x longest, line_x, line_y + total_y)
-        lines in
-    let y_offset = Float.(of_int y_count * line_height) in
-    if (not (String.is_empty text)) && Char.equal '\n' text.[String.length text - 1]
-    then max_x_offset, 0., y_offset +. line_height
-    else max_x_offset, x_offset, y_offset
-
-
-  let char_indices char text =
-    let len = String.length text in
-    let rec loop from idxs =
-      if from < len
-      then (
-        match String.index_from text from char with
-        | None -> idxs
-        | Some i -> loop (i + 1) (i :: idxs) )
-      else idxs in
-    match String.index_from text 0 char with
-    | None -> []
-    | Some i -> List.rev (loop (i + 1) [ i ])
-
-
   let vertical_scroll container_height text_height line_height y_offset y_scroll =
     let open Float in
     if text_height > container_height
@@ -385,34 +324,26 @@ module T = struct
         OffsetMap.Row.nearest_index row target_x)
 
 
-  (* Add spaces between consecutive newline characters to ensure they are not collapsed/combined by
-     Revery text wrapping.
-   *
-   * TODO/FIXME: I've got an idea of how to make this more comprehensive and efficient.
-   * If I use the offset map, I can target the row starts and check if they are newlines
-   * or spaces, then add in the zero_space characters as needed. *)
-  let newline_hack text =
-    let f (was_newline, acc) c =
-      let is_newline = Char.equal '\n' c in
-      let s = String.of_char c in
-      ( is_newline
-      , if was_newline && (is_newline || Char.equal c ' ') then acc ^ zero_space ^ s else acc ^ s )
-    in
-    let _, hacked = String.fold ~f ~init:(false, "") text in
-    (if String.equal (Str.first_chars hacked 1) " " then zero_space else "")
-    ^ hacked
-    ^ if String.equal (Str.last_chars hacked 1) "\n" then zero_space else ""
+  (* Workaround for Revery text wrapping not working exactly as I'd like.
+   * - spaces inserted following newlines on empty rows to prevent collapse
+   * - zero width unicodes inserted before leading spaces
+   * - spaces which triggered a wrap are replaced by newlines *)
+  let newline_hack offsets text =
+    let len = String.length text in
+    let f acc ({ start; x_offsets; _ } : OffsetMap.Row.t) =
+      let before = Str.string_before acc start in
+      let after = Str.string_after acc start in
+      let spacer =
+        if List.length x_offsets = 0
+        then " "
+        else if start < len && is_space text.[start]
+        then zero_space
+        else "" in
+      if start > 1 && is_space text.[start - 1]
+      then String.drop_suffix before 1 ^ "\n" ^ spacer ^ after
+      else before ^ spacer ^ after in
+    List.fold ~f ~init:text (List.rev (Map.data offsets))
 
-
-  (* NOTE: for ignore whitspace wrapping (above is for Wrap). Trying to make it
-   * work without plain wrap again.... *)
-  (* let newline_hack text =
-   *   let f (was_newline, acc) c =
-   *     let is_newline = Char.equal '\n' c in
-   *     let s = String.of_char c in
-   *     is_newline, if was_newline && is_newline then acc ^ zero_space ^ s else acc ^ s in
-   *   let _, hacked = String.fold ~f ~init:(false, "") text in
-   *   hacked ^ if String.equal (Str.last_chars hacked 1) "\n" then zero_space else "" *)
 
   let end_chars = Set.of_list (module Char) [ '\n'; ' '; '/'; '_'; '-'; ','; '.'; ';'; '"' ]
 
@@ -735,7 +666,7 @@ module T = struct
                         ]
                   ; kind (TextNode font_info)
                   ]
-                (if show_placeholder then props.placeholder else newline_hack value)
+                (if show_placeholder then props.placeholder else newline_hack model.offsets value)
             ]
         :: cursor
         :: highlights ) in
