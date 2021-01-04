@@ -4,16 +4,6 @@ open Bonsai.Infix
 open Components
 module Attr = Attributes
 
-(* FIXME: Would like to wrap long words, rather than extend out of the container and
- * require scrolling, but with how wrapping works in revery, I would need to change a lot
- * of fundamentals here (might in future, to be more like markdown.re to enable better
- * selection highlighting, and other inline formatting etc). If I want it bad enough,
- * consider creating a new wrapping mode in a Revery PR, similar to WrapIgnoreWhiteSpace
- * but with non-hyphenated word breaking when a single word exceeds the available space.
- *
- * Possible workaround might be to mark row beginnings in OffsetMap accordingly, then
- * use newline_hack to insert the \n, haven't considered enough yet though. *)
-
 type props =
   { autofocus : bool
   ; text_color : Color.t
@@ -24,6 +14,7 @@ type props =
   ; default_value : string option
   ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
   ; max_height : int
+  ; force_wrap : bool
   ; attributes : Attr.t list
   }
 
@@ -37,6 +28,7 @@ let props
     ?default_value
     ?(on_key_down = fun _ _ _ -> Event.no_op)
     ?(max_height = Int.max_value)
+    ?(force_wrap = true)
     attributes
   =
   { autofocus
@@ -48,6 +40,7 @@ let props
   ; default_value
   ; on_key_down
   ; max_height
+  ; force_wrap
   ; attributes
   }
 
@@ -128,42 +121,45 @@ module OffsetMap = struct
         sprintf "%srow %i -> %s\n" acc key (Row.to_string data))
 
 
-  let make ?(from_row = 0) ?(from_pos = 0) font_info line_height margin text =
-    let text = Str.string_after text from_pos in
+  let make ?(from_row = 0) ?(from_pos = 1) ~force_wrap font_info line_height margin text =
     let len = String.length text in
     let measure_width = measure_text_width font_info in
-    let add_row (t : t) row start x_offsets =
-      let row = from_row + row in
-      let start = from_pos + start in
+    let add_row (t : t) row start offsets =
+      let x_offsets = List.rev offsets in
       Map.add_exn t ~key:row ~data:{ start; y_offset = Float.of_int row *. line_height; x_offsets }
     in
-    let f (pos, row, row_start, offsets, t) c =
+    let rec loop pos row row_start offsets t =
       (* zero_width character used in newline_hack to prevent leading space collapse *)
-      let pad = if is_space text.[row_start] then zero_space else "" in
-      let width = measure_width (pad ^ String.slice text row_start pos) in
-      let next = pos + 1 in
-      match c with
-      | ' '
-      (* Lookahead to next whitespace to see if upcoming word overflows. *)
-        when next < len
-             &&
-             let word_start = next_non_whitespace text next in
-             let lookahead =
-               match
-                 ( Option.bind word_start ~f:(fun n -> String.index_from text n ' ')
-                 , String.index_from text next '\n' )
-               with
-               | Some next_space, Some next_break -> Int.min next_space next_break
-               | Some next_space, None -> next_space
-               | None, Some next_break -> next_break
-               | _ -> len in
-             Float.( > ) (measure_width (pad ^ String.slice text row_start lookahead)) margin ->
-        next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
-      | '\n' -> next, row + 1, pos, [], add_row t row row_start (List.rev offsets)
-      | c -> next, row, row_start, width :: offsets, t in
-    let _, row, row_start, offsets, t =
-      String.fold ~init:(1, 0, 0, [], Map.empty (module Int)) ~f text in
-    add_row t row row_start (List.rev offsets)
+      if pos <= len
+      then (
+        let pad = if is_space text.[row_start] then zero_space else "" in
+        let width =
+          try measure_width (pad ^ String.slice text row_start pos) with
+          | _ -> failwith (sprintf "pos = %i; row_start = %i" pos row_start) in
+        let next = pos + 1 in
+        match text.[pos - 1] with
+        | ' '
+        (* Lookahead to next whitespace to see if upcoming word overflows. *)
+          when next < len
+               &&
+               let word_start = next_non_whitespace text next in
+               let lookahead =
+                 match
+                   ( Option.bind word_start ~f:(fun n -> String.index_from text n ' ')
+                   , String.index_from text next '\n' )
+                 with
+                 | Some next_space, Some next_break -> Int.min next_space next_break
+                 | Some next_space, None -> next_space
+                 | None, Some next_break -> next_break
+                 | _ -> len in
+               Float.(measure_width (pad ^ String.slice text row_start lookahead) > margin) ->
+          loop next (row + 1) pos [] (add_row t row row_start offsets)
+        | '\n' -> loop next (row + 1) pos [] (add_row t row row_start offsets)
+        | c when force_wrap && Float.(width > margin) ->
+          loop pos (row + 1) (pos - 1) [] (add_row t row row_start offsets)
+        | c -> loop next row row_start (width :: offsets) t )
+      else add_row t row row_start offsets in
+    loop from_pos from_row (from_pos - 1) [] (Map.empty (module Int))
 
 
   let row_start_of_position t position =
@@ -176,9 +172,10 @@ module OffsetMap = struct
     List.find_mapi ~f (Map.data t)
 
 
-  let update ~old ~from font_info line_height margin text =
+  let update ~force_wrap ~old ~from font_info line_height margin text =
     let i, start = Option.value ~default:(0, 0) (row_start_of_position old from) in
-    let fresh = make ~from_row:i ~from_pos:start font_info line_height margin text in
+    let fresh =
+      make ~force_wrap ~from_row:i ~from_pos:(start + 1) font_info line_height margin text in
     match Map.append ~lower_part:(Map.filter_keys old ~f:(( > ) i)) ~upper_part:fresh with
     | `Ok updated -> updated
     | _ -> failwith "OffsetMap update failure (overlapping keys)."
@@ -361,7 +358,8 @@ module T = struct
   (* Workaround for Revery text wrapping not working exactly as I'd like.
    * - spaces inserted following newlines on empty rows to prevent collapse
    * - zero width unicodes inserted before leading spaces
-   * - spaces which triggered a wrap are replaced by newlines *)
+   * - spaces which triggered a wrap are replaced by newlines
+   * - row starts preceded by non-whitespace (forced break) get a newline *)
   let newline_hack offsets text =
     let len = String.length text in
     let f acc ({ start; x_offsets; _ } : OffsetMap.Row.t) =
@@ -373,8 +371,12 @@ module T = struct
         else if start < len && is_space text.[start]
         then zero_space
         else "" in
-      if start > 1 && is_space text.[start - 1]
-      then String.drop_suffix before 1 ^ "\n" ^ spacer ^ after
+      if start > 1
+      then (
+        match text.[start - 1] with
+        | ' ' -> String.drop_suffix before 1 ^ "\n" ^ spacer ^ after
+        | '\n' -> before ^ spacer ^ after
+        | _ -> before ^ "\n" ^ spacer ^ after )
       else before ^ spacer ^ after in
     List.fold ~f ~init:text (List.rev (Map.data offsets))
 
@@ -439,7 +441,7 @@ module T = struct
     Sdl2.Clipboard.setText (String.slice text first last)
 
 
-  let update_offsets ?new_value ?new_cursor (model : Model.t) font_info =
+  let update_offsets ?new_value ?new_cursor ~force_wrap (model : Model.t) font_info =
     match Option.bind model.text_node ~f:(fun n -> n#getParent ()) with
     | Some node ->
       let value = Option.value ~default:"" model.value in
@@ -452,10 +454,11 @@ module T = struct
       let line_height = get_line_height font_info node in
       let offsets =
         match new_value with
-        | None -> OffsetMap.make font_info line_height margin value
+        | None -> OffsetMap.make ~force_wrap font_info line_height margin value
         | Some v ->
           ( match first_diff value v with
-          | Some from -> OffsetMap.update ~old:model.offsets ~from font_info line_height margin v
+          | Some from ->
+            OffsetMap.update ~force_wrap ~old:model.offsets ~from font_info line_height margin v
           | None -> model.offsets ) in
       let _, x_offset, y_offset = OffsetMap.find_position offsets cursor_position in
       let x_scroll =
@@ -765,18 +768,31 @@ module T = struct
           None
         | Some _ -> model.select_start
         | None -> None in
-      { (update_offsets model (get_font_info props.attributes) ~new_value ~new_cursor) with
+      { (update_offsets
+           ~force_wrap:props.force_wrap
+           ~new_value
+           ~new_cursor
+           model
+           (get_font_info props.attributes))
+        with
         value = Some new_value
       ; select_start
       }
     | Set_value new_value ->
       Revery_UI.Mouse.releaseCapture ();
       let new_cursor = Int.min model.cursor_position (String.length new_value) in
-      { (update_offsets model (get_font_info props.attributes) ~new_value ~new_cursor) with
+      { (update_offsets
+           ~force_wrap:props.force_wrap
+           ~new_value
+           ~new_cursor
+           model
+           (get_font_info props.attributes))
+        with
         value = Some new_value
       ; select_start = None
       }
-    | UpdateOffsets -> update_offsets model (get_font_info props.attributes)
+    | UpdateOffsets ->
+      update_offsets ~force_wrap:props.force_wrap model (get_font_info props.attributes)
     | Reposition (cursor_position, x_offset, y_offset, x_scroll, y_scroll) ->
       { model with cursor_position; x_offset; y_offset; x_scroll; y_scroll }
     | Set_text_node node -> { model with text_node = Some node }

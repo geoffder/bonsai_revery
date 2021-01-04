@@ -11,6 +11,7 @@ type props =
   ; default_value : string option
   ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
   ; max_height : int
+  ; force_wrap : bool
   ; attributes : Attributes.t list
   }
 
@@ -24,6 +25,7 @@ val props
   -> ?default_value:string
   -> ?on_key_down:(Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t)
   -> ?max_height:int
+  -> ?force_wrap:bool
   -> Attributes.t list
   -> props
 
