@@ -13,29 +13,21 @@ val button
   -> string
   -> Element.t
 
-module Text_input : sig
-  type props =
-    { autofocus : bool
-    ; cursor_color : Color.t
-    ; placeholder : string
-    ; placeholder_color : Color.t
-    ; default_value : string option
-    ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
-    ; attributes : Attributes.t list
-    }
+val clickable_box
+  :  ?key:Brisk_reconciler.Key.t
+  -> ?disabled:bool
+  -> Attributes.attributes
+  -> Element.t
+  -> Element.t
 
-  val props
-    :  ?autofocus:bool
-    -> ?cursor_color:Color.t
-    -> ?placeholder:string
-    -> ?placeholder_color:Color.t
-    -> ?default_value:string
-    -> ?on_key_down:(Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t)
-    -> Attributes.t list
-    -> props
-
-  val component : (props, string * (string -> Event.t) * Element.t) Bonsai.t
-end
+val mouse_capture
+  :  ?on_mouse_down:('a -> Node_events.Mouse_button.t -> Event.t * 'a option)
+  -> ?on_mouse_up:('a -> Node_events.Mouse_button.t -> Event.t * 'a option)
+  -> ?on_mouse_move:('a -> Node_events.Mouse_move.t -> Event.t * 'a option)
+  -> ?on_mouse_wheel:('a -> Node_events.Mouse_wheel.t -> Event.t * 'a option)
+  -> ?on_release:('a option -> Event.t)
+  -> 'a
+  -> unit
 
 module Expert : sig
   type 'a component =

@@ -49,6 +49,7 @@ module Attr : sig
   val on_mouse_leave : (Mouse_move.t -> Event.t) -> t
   val on_mouse_over : (Mouse_move.t -> Event.t) -> t
   val on_mouse_out : (Mouse_move.t -> Event.t) -> t
+  val on_bounding_box_changed : (Import.BoundingBox2d.t -> Event.t) -> t
   val on_dimensions_changed : (Dimensions_changed.t -> Event.t) -> t
   val on_focus : Event.t -> t
   val on_blur : Event.t -> t
@@ -79,30 +80,6 @@ module Components : sig
     -> string
     -> Element.t
 
-  module Text_input : sig
-    type props =
-      { autofocus : bool
-      ; cursor_color : Color.t
-      ; placeholder : string
-      ; placeholder_color : Color.t
-      ; default_value : string option
-      ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
-      ; attributes : Attr.t list
-      }
-
-    val props
-      :  ?autofocus:bool
-      -> ?cursor_color:Color.t
-      -> ?placeholder:string
-      -> ?placeholder_color:Color.t
-      -> ?default_value:string
-      -> ?on_key_down:(Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t)
-      -> Attr.t list
-      -> props
-
-    val component : (props, string * (string -> Event.t) * Element.t) Bonsai.t
-  end
-
   module Expert : sig
     type 'a component =
       ?key:UI.React.Key.t
@@ -120,6 +97,13 @@ module Components : sig
   end
 end =
   Components
+
+module Text_input = Text_input
+module Text_area = Text_area
+module Resizable = Resizable
+module Draggable = Draggable
+module Slider = Slider
+module ScrollView = ScrollView
 
 (** Constructing colors. *)
 module Color = Color
@@ -140,3 +124,7 @@ end
 
 (** Mirror of [Revery_UI] for advanced uses *)
 module UI = UI
+
+module BoundingBox2d = struct
+  include Import.BoundingBox2d
+end

@@ -150,7 +150,7 @@ let start_generic_poly
       view, apply_action, on_display, model
   end
   in
-  let _stopEventLoop = Revery_Lwt.startEventLoop () in
+  (* let _stopEventLoop = Revery_Lwt.startEventLoop () in *)
   Revery.App.start (fun reveryApp ->
       let model_v = Incr.Var.create initial_model in
       let model = Incr.Var.watch model_v in
@@ -194,6 +194,9 @@ let start_generic_poly
             (fun action ->
               Incr.Clock.advance_clock Incr.clock ~to_:(Time_ns.now ());
               Timber.Log.perf "pre-action stabilize" Incr.stabilize;
+
+              Lwt.wakeup_paused ();
+              Lwt_engine.iter false;
 
               apply_action action)
             r))

@@ -3,6 +3,32 @@ open Import
 open Bonsai.Infix
 module Attr = Attributes
 
+let mouse_capture
+    ?(on_mouse_down = fun state _evt -> Event.no_op, Some state)
+    ?(on_mouse_up = fun state _evt -> Event.no_op, Some state)
+    ?(on_mouse_move = fun state _evt -> Event.no_op, Some state)
+    ?(on_mouse_wheel = fun state _evt -> Event.no_op, Some state)
+    ?(on_release = fun _state -> Event.no_op)
+    initial_state
+  =
+  let state = ref (Some initial_state) in
+  let wrap f mouse_event =
+    ( match !state with
+    | Some s ->
+      let event, new_state = f s mouse_event in
+      Event.Expert.handle event;
+      state := new_state
+    | None -> () );
+    if Option.is_none !state then Revery_UI.Mouse.releaseCapture () in
+  Revery_UI.Mouse.setCapture
+    (Option.value_exn (Revery_UI.getActiveWindow ()))
+    ~onMouseDown:(wrap on_mouse_down)
+    ~onMouseUp:(wrap on_mouse_up)
+    ~onMouseMove:(wrap on_mouse_move)
+    ~onMouseWheel:(wrap on_mouse_wheel)
+    ~onRelease:(fun () -> on_release !state |> Event.Expert.handle)
+
+
 let make_native_component constructor attributes f hooks =
   let open UI.React in
   let children, hooks = f hooks in
@@ -31,7 +57,6 @@ let native_box =
 
 let clickable_box' =
   let is_mouse_captured = ref false in
-
   let module Log = (val Log.with_namespace (Source_code_position.to_string [%here])) in
   fun ?key ?(disabled = false) component attributes f ->
     component
@@ -67,7 +92,7 @@ let clickable_box' =
                | Revery.MouseButton.BUTTON_RIGHT -> [ attributes.custom_events.on_right_click ]
                | _ -> [] ) in
 
-             Event.Many (List.filter_map events ~f:Fn.id) )
+             Event.Many (List.filter_opt events) )
            else Event.no_op in
 
          let user_on_mouse_leave = attributes.native_events.onMouseLeave in
@@ -87,7 +112,6 @@ let clickable_box' =
                   Some
                     (fun e ->
                       capture ();
-
                       Option.iter user_on_mouse_down ~f:(fun f -> f e))
               ; onMouseUp =
                   Some
@@ -249,6 +273,8 @@ let tick =
              ~name:"tick stabilize"
              (fun _ ->
                Incr.Clock.advance_clock Incr.clock ~to_:(Time_ns.now ());
+               Lwt.wakeup_paused ();
+               Lwt_engine.iter false;
                Timber.Log.perf "tick stabilize" Incr.stabilize)
              (Revery.Time.ofFloatSeconds (Time.Span.to_sec interval)) in
 
@@ -337,276 +363,3 @@ let button =
          Attr.make_attributes ~style ~kind:attributes.kind () in
 
        clickable_box ~disabled attributes (text text_attributes title))
-
-
-module Text_input = struct
-  type props =
-    { autofocus : bool
-    ; cursor_color : (Color.t[@sexp.opaque])
-    ; placeholder : string
-    ; placeholder_color : (Color.t[@sexp.opaque])
-    ; default_value : string option
-    ; on_key_down : Node_events.Keyboard.t -> string -> (string -> Event.t) -> Event.t
-    ; attributes : Attr.t list
-    }
-  [@@deriving sexp_of]
-
-  let props
-      ?(autofocus = false)
-      ?(cursor_color = Revery.UI.Components.Input.Styles.defaultCursorColor)
-      ?(placeholder = "")
-      ?(placeholder_color = Revery.UI.Components.Input.Styles.defaultPlaceholderColor)
-      ?default_value
-      ?(on_key_down = fun _ _ _ -> Event.no_op)
-      attributes
-    =
-    { autofocus
-    ; cursor_color
-    ; placeholder
-    ; placeholder_color
-    ; default_value
-    ; on_key_down
-    ; attributes
-    }
-
-
-  module T = struct
-    module Input = struct
-      type t = bool * props
-    end
-
-    module Model = struct
-      type t =
-        { focused : bool
-        ; value : string option
-        ; cursor_position : int
-        ; text_node : (UI.node[@sexp.opaque] [@equal.ignore]) option
-        ; input_node : (UI.node[@sexp.opaque] [@equal.ignore]) option
-        ; scroll_offset : int ref
-        }
-      [@@deriving equal, sexp]
-    end
-
-    module Action = struct
-      type t =
-        | Focus
-        | Blur
-        | Text_input of string * int
-        | Set_value of string
-        | Set_text_node of (UI.node[@sexp.opaque])
-        | Set_input_node of (UI.node[@sexp.opaque])
-      [@@deriving sexp_of]
-    end
-
-    module Result = struct
-      type t = string * (string -> Event.t) * Element.t
-    end
-
-    let name = "Input"
-
-    let default_style =
-      let open Revery.UI.LayoutTypes in
-      { Attr.default_style with
-        color = Colors.black
-      ; cursor = Some Revery.MouseCursors.text
-      ; flexDirection = Revery.UI.LayoutTypes.Row
-      ; alignItems = AlignCenter
-      ; justifyContent = JustifyFlexStart
-      ; overflow = Hidden
-      }
-
-
-    let default_kind = Attr.KindSpec.(TextNode { Text.default with size = 18. })
-
-    let compute ~inject ((cursor_on, input) : Input.t) (model : Model.t) =
-      let open Revery.UI.Components.Input in
-      let attributes = Attr.make ~default_style ~default_kind input.attributes in
-      let font_info =
-        match attributes.kind with
-        | TextNode spec -> spec
-        | _ -> Attr.KindSpec.Text.default in
-      let value = Option.first_some model.value input.default_value |> Option.value ~default:"" in
-      let set_value value = inject (Action.Set_value value) in
-      let show_placeholder = String.equal value "" in
-      let scroll_offset = model.scroll_offset in
-      let cursor_position = min model.cursor_position (String.length value) in
-
-      let measure_text_width text =
-        let dimensions =
-          Revery_Draw.Text.dimensions
-            ~smoothing:Revery.Font.Smoothing.default
-            ~fontFamily:font_info.family
-            ~fontSize:font_info.size
-            ~fontWeight:font_info.weight
-            text in
-        Float.to_int dimensions.width in
-
-      let () =
-        let cursor_offset = measure_text_width (String.sub value ~pos:0 ~len:cursor_position) in
-
-        match Option.bind model.text_node ~f:(fun node -> node#getParent ()) with
-        | Some containerNode ->
-          let container = (containerNode#measurements () : UI.Dimensions.t) in
-          if cursor_offset < !scroll_offset
-          then scroll_offset := cursor_offset
-          else if cursor_offset - !scroll_offset > container.width
-          then scroll_offset := cursor_offset - container.width
-        | None -> () in
-
-      let update value cursor_position = inject (Action.Text_input (value, cursor_position)) in
-
-      let handle_text_input (event : Node_events.Text_input.t) =
-        let value, cursor_position = insertString value event.text cursor_position in
-        update value cursor_position in
-
-      let handle_key_down (keyboard_event : Node_events.Keyboard.t) =
-        let event =
-          match keyboard_event.key with
-          | Left ->
-            let cursor_position = getSafeStringBounds value cursor_position (-1) in
-            inject (Action.Text_input (value, cursor_position))
-          | Right ->
-            let cursor_position = getSafeStringBounds value cursor_position 1 in
-            inject (Action.Text_input (value, cursor_position))
-          | Delete ->
-            let value, cursor_position = removeCharacterAfter value cursor_position in
-            inject (Action.Text_input (value, cursor_position))
-          | Backspace ->
-            let value, cursor_position = removeCharacterBefore value cursor_position in
-            inject (Action.Text_input (value, cursor_position))
-          | Escape ->
-            UI.Focus.loseFocus ();
-            Event.no_op
-          | _ -> Event.no_op in
-        Event.Many [ event; input.on_key_down keyboard_event value set_value ] in
-
-      let handle_click (event : Node_events.Mouse_button.t) =
-        match model.text_node with
-        | Some node ->
-          let sceneOffsets = (node#getSceneOffsets () : UI.Offset.t) in
-          let textOffset = int_of_float event.mouseX - sceneOffsets.left + !scroll_offset in
-          let cursor_position =
-            Revery_Draw.Text.indexNearestOffset ~measure:measure_text_width value textOffset in
-
-          Option.iter model.input_node ~f:UI.Focus.focus;
-
-          update value cursor_position
-        | None -> Event.no_op in
-
-      let cursor =
-        let startStr, _ = getStringParts cursor_position value in
-        let textWidth = measure_text_width startStr in
-        let offset = textWidth - !scroll_offset in
-        tick ~every:(if model.focused then Time.Span.of_ms 16.0 else Time.Span.of_hr 1.0)
-        @@ box
-             Attr.[ style (Styles.cursor ~offset) ]
-             [ opacity
-                 ~opacity:(if model.focused && cursor_on then 1.0 else 0.0)
-                 [ box
-                     Attr.
-                       [ style
-                           Style.
-                             [ width Constants.cursorWidth
-                             ; height (Float.to_int font_info.size)
-                             ; background_color input.cursor_color
-                             ]
-                       ]
-                     []
-                 ]
-             ] in
-
-      let attributes =
-        Attr.(
-          node_ref (fun node ->
-              if input.autofocus then UI.Focus.focus node;
-              inject (Action.Set_input_node node))
-          :: on_mouse_down handle_click
-          :: on_key_down handle_key_down
-          :: on_text_input handle_text_input
-          :: on_focus (inject Action.Focus)
-          :: on_blur (inject Action.Blur)
-          :: input.attributes)
-        |> Attr.make ~default_style ~default_kind in
-
-      attributes.style
-        <- { attributes.style with
-             cursor = Option.first_some attributes.style.cursor (Some Revery.MouseCursors.text)
-           };
-
-      let view =
-        clickable_box
-          attributes
-          (box
-             Attr.[ style Styles.marginContainer ]
-             [ box
-                 Attr.[ style Styles.textContainer ]
-                 [ text
-                     Attr.
-                       [ node_ref (fun node -> inject (Action.Set_text_node node))
-                       ; style
-                           (Styles.text
-                              ~showPlaceholder:show_placeholder
-                              ~scrollOffset:scroll_offset
-                              ~placeholderColor:input.placeholder_color
-                              ~color:attributes.style.color)
-                       ; kind attributes.kind
-                       ]
-                     (if show_placeholder then input.placeholder else value)
-                 ]
-             ; cursor
-             ]) in
-
-      value, set_value, view
-
-
-    let apply_action ~inject:_ ~schedule_event:_ _ (model : Model.t) = function
-      | Action.Focus ->
-        (* resetCursor ();
-         * onFocus (); *)
-        Sdl2.TextInput.start ();
-
-        { model with focused = true }
-      | Blur ->
-        (* resetCursor();
-         * onBlur(); *)
-        Sdl2.TextInput.stop ();
-
-        { model with focused = false }
-      | Text_input (value, cursor_position) -> { model with value = Some value; cursor_position }
-      | Set_value value ->
-        { model with
-          value = Some value
-        ; cursor_position = min model.cursor_position (String.length value)
-        }
-      | Set_text_node node -> { model with text_node = Some node }
-      | Set_input_node node -> { model with input_node = Some node }
-  end
-
-  let component =
-    let cursor_on =
-      Bonsai.With_incr.of_incr (Incr.Clock.watch_now Incr.clock)
-      >>| fun time ->
-      Int.rem (Time_ns.to_span_since_epoch time |> Time_ns.Span.to_int_ms) 1000 > 500 in
-
-    let component =
-      Bonsai.of_module
-        (module T)
-        ~default_model:
-          T.Model.
-            { focused = false
-            ; value = None
-            ; cursor_position = 0
-            ; text_node = None
-            ; input_node = None
-            ; scroll_offset = ref 0
-            } in
-
-    let cutoff =
-      Bonsai.With_incr.value_cutoff
-        ~cutoff:
-          (Incr.Cutoff.create
-             (fun ~old_value:(old_timer, old_input) ~new_value:(new_timer, new_input) ->
-               Bool.equal old_timer new_timer && phys_equal old_input new_input)) in
-
-    ignore @>> cursor_on |> Bonsai.Arrow.extend_first >>> cutoff >>> component
-end
